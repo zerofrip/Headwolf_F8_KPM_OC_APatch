@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   KPM OC Manager v3.0 — Application Logic
+   KPM OC Manager v3.2 — Application Logic
    Headwolf F8 · Dimensity 8300 (MT8792 / MT6897)
-   CPU: CSRAM LUT via kpm_oc.ko + sysfs scaling
+   CPU: CSRAM LUT via kpm_oc.ko (mtk-cpufreq-hw domains)
    GPU: /proc/gpufreqv2 interface
    ═══════════════════════════════════════════════════════════════════════ */
 
@@ -53,7 +53,7 @@
     if (cmd.includes('opp_table') || cmd.includes('cpu_opp_table')) {
       return {
         errno: 0,
-        stdout: 'CPU:0:480000:650000|CPU:0:850000:725000|CPU:0:1200000:800000|CPU:0:1600000:875000|CPU:0:2000000:950000|CPU:0:2200000:1000000|CPU:4:400000:650000|CPU:4:850000:725000|CPU:4:1400000:825000|CPU:4:2000000:925000|CPU:4:2600000:1000000|CPU:4:3200000:1100000|CPU:7:400000:650000|CPU:7:1000000:750000|CPU:7:1600000:850000|CPU:7:2200000:950000|CPU:7:2800000:1025000|CPU:7:3350000:1125000',
+        stdout: 'CPU:0:480000:500000|CPU:0:600000:525000|CPU:0:700000:550000|CPU:0:1200000:612500|CPU:0:1600000:687500|CPU:0:2000000:793750|CPU:0:2200000:806250|CPU:4:400000:500000|CPU:4:800000:568750|CPU:4:1400000:668750|CPU:4:2000000:768750|CPU:4:2600000:856250|CPU:4:3200000:1006250|CPU:7:400000:487500|CPU:7:800000:550000|CPU:7:1400000:631250|CPU:7:2000000:731250|CPU:7:2800000:900000|CPU:7:3350000:1037500',
         stderr: ''
       };
     }
@@ -88,6 +88,13 @@
   }
 
   /* ─── Data Parsing ────────────────────────────────────────────────── */
+
+  /*
+   * CPU OPP format from kpm_oc.ko v3.2:
+   *   CPU:<policy>:<freq_khz>:<volt_uv>|...
+   * Voltage is decoded in the kernel module from CSRAM LUT:
+   *   volt_uv = ((raw32 & 0x9FFFFFFF) >> 12) * 10
+   */
   function parseCpuOppTable(raw) {
     const cpuMap = new Map();
     const entries = raw.trim().split('|').filter(s => s.length > 0);
@@ -100,12 +107,12 @@
       const freq = parseInt(parts[2], 10);   // KHz
       const volt = parseInt(parts[3], 10);   // µV
 
-      if (isNaN(freq) || isNaN(volt)) continue;
+      if (isNaN(freq) || freq <= 0) continue;
 
       if (!cpuMap.has(policy)) cpuMap.set(policy, []);
       cpuMap.get(policy).push({
-        freq, volt,
-        origFreq: freq, origVolt: volt,
+        freq, volt: volt || 0,
+        origFreq: freq, origVolt: volt || 0,
         modified: false, isNew: false, removing: false,
       });
     }
@@ -169,9 +176,9 @@
   }
 
   function formatVoltUv(uv) {
-    if (uv === 0) return '—';
+    if (!uv || uv === 0) return '—';
     if (uv >= 1000000) return (uv / 1000000).toFixed(4) + ' V';
-    return (uv / 1000).toFixed(1) + ' mV';
+    return (uv / 1000).toFixed(2) + ' mV';
   }
 
   /* ─── Toast Notifications ─────────────────────────────────────────── */
