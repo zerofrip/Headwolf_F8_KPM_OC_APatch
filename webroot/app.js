@@ -30,17 +30,21 @@
   };
 
   /* ─── Shell Command Execution ─────────────────────────────────────── */
+  let _execCounter = 0;
   async function exec(cmd) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (typeof ksu !== 'undefined' && ksu.exec) {
-        ksu.exec(cmd, '{}', (result) => {
-          try {
-            const obj = JSON.parse(result);
-            resolve({ errno: obj.errno || 0, stdout: obj.out || '', stderr: obj.err || '' });
-          } catch {
-            resolve({ errno: 0, stdout: result, stderr: '' });
-          }
-        });
+        const cbName = `_ksu_exec_cb_${Date.now()}_${_execCounter++}`;
+        window[cbName] = (errno, stdout, stderr) => {
+          delete window[cbName];
+          resolve({ errno: errno || 0, stdout: stdout || '', stderr: stderr || '' });
+        };
+        try {
+          ksu.exec(cmd, '{}', cbName);
+        } catch (e) {
+          delete window[cbName];
+          resolve({ errno: -1, stdout: '', stderr: e.message || '' });
+        }
       } else {
         console.log('[MOCK] exec:', cmd);
         resolve(getMockResponse(cmd));
