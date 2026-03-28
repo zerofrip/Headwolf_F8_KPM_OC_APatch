@@ -1,0 +1,6 @@
+id=f8_kpm_oc_manager
+name=Headwolf_F8_KPM_OC_APatch
+version=v1.0
+versionCode=1
+author=zerofrip
+description=Dynamic CPU/GPU Overclock via KPM (Kernel Patch Module). Includes a WebUI to configure clock/voltage metrics.

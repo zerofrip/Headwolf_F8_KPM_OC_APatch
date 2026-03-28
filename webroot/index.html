@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KPM_OC Manager</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0; padding: 20px;
+            background-color: #f5f5f7; color: #1d1d1f;
+        }
+        h2 { text-align: center; color: #007aff; }
+        .card {
+            background: #fff; border-radius: 12px;
+            padding: 20px; margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        label { display: block; margin-top: 15px; font-weight: bold; }
+        input[type="number"] {
+            width: 100%; padding: 10px; margin-top: 5px;
+            border: 1px solid #d1d1d6; border-radius: 8px;
+            box-sizing: border-box; font-size: 16px;
+        }
+        button {
+            width: 100%; padding: 12px; margin-top: 20px;
+            background-color: #007aff; color: white;
+            border: none; border-radius: 8px;
+            font-size: 16px; font-weight: bold; cursor: pointer;
+        }
+        button:hover { background-color: #005bb5; }
+        .status { margin-top: 15px; font-size: 14px; color: #34c759; text-align: center; }
+        .error { color: #ff3b30; }
+        .desc { font-size: 12px; color: #8e8e93; margin-top: 4px; }
+    </style>
+</head>
+<body>
+
+    <h2>KPM Overclock Manager</h2>
+
+    <div class="card" id="kpm-controller">
+        <p>Dynamic OPP Configuration</p>
+
+        <!-- CPU Configuration -->
+        <label for="cpu_oc">CPU Overclock Percentage (%)</label>
+        <div class="desc">Example: 10 (Adds a new freq point 10% higher than default max)</div>
+        <input type="number" id="cpu_oc" value="0">
+
+        <label for="cpu_uv">CPU Voltage Offset (µV)</label>
+        <div class="desc">Example: -25000 (Lowers every CPU frequency point by 25mV)</div>
+        <input type="number" id="cpu_uv" value="0">
+
+        <hr style="margin-top: 20px; border: 0.5px solid #eaeaea;">
+
+        <!-- GPU Configuration -->
+        <label for="gpu_oc">GPU Overclock Percentage (%)</label>
+        <div class="desc">Example: 15 (Adds a new freq point 15% higher than default max)</div>
+        <input type="number" id="gpu_oc" value="0">
+
+        <label for="gpu_uv">GPU Voltage Offset (µV)</label>
+        <div class="desc">Example: +25000 (Raises every GPU frequency point by 25mV)</div>
+        <input type="number" id="gpu_uv" value="0">
+
+        <button onclick="applySettings()">Apply Settings</button>
+        <div id="status-msg" class="status"></div>
+    </div>
+
+    <div class="card" id="opp-viewer">
+        <p>Captured Frequency & Voltage Tables</p>
+        <div class="desc">Shows the frequencies and voltages intercepted by the KPM at boot.</div>
+        <button onclick="loadOPPTable()" style="margin-top: 5px; margin-bottom: 10px; background-color: #34c759;">Refresh Table</button>
+        <pre id="opp_table_display" style="background:#2d2d2d; color:#fff; padding:10px; border-radius:8px; overflow-x:auto; font-size:12px; max-height: 200px; overflow-y: auto;">Loading...</pre>
+    </div>
+
+    <!-- KernelSU specific interaction script -->
+    <script>
+        const KS_PARAMS_PATH = "/sys/module/kpm_oc/parameters/";
+
+        // Utility to run shell commands via KernelSU UI API
+        async function runCmd(cmd) {
+            return new Promise((resolve, reject) => {
+                if (typeof ksu !== 'undefined' && ksu.exec) {
+                    ksu.exec(cmd, JSON.stringify({}), (res) => {
+                        let obj = JSON.parse(res);
+                        resolve(obj.out || obj.err);
+                    });
+                } else {
+                    console.log("Mock cmd execute: " + cmd);
+                    resolve("0"); // mock value for desktop debugging
+                }
+            });
+        }
+
+        async function loadCurrentSettings() {
+            try {
+                let cpu_oc = await runCmd(`cat ${KS_PARAMS_PATH}cpu_oc_percent`);
+                if (cpu_oc && !cpu_oc.includes("No such file")) document.getElementById('cpu_oc').value = cpu_oc.trim();
+
+                let cpu_uv = await runCmd(`cat ${KS_PARAMS_PATH}cpu_uvolt_offset`);
+                if (cpu_uv && !cpu_uv.includes("No such file")) document.getElementById('cpu_uv').value = cpu_uv.trim();
+
+                let gpu_oc = await runCmd(`cat ${KS_PARAMS_PATH}gpu_oc_percent`);
+                if (gpu_oc && !gpu_oc.includes("No such file")) document.getElementById('gpu_oc').value = gpu_oc.trim();
+
+                let gpu_uv = await runCmd(`cat ${KS_PARAMS_PATH}gpu_uvolt_offset`);
+                if (gpu_uv && !gpu_uv.includes("No such file")) document.getElementById('gpu_uv').value = gpu_uv.trim();
+                
+            } catch (e) {
+                document.getElementById('status-msg').innerText = "Failed to load current settings.";
+                document.getElementById('status-msg').className = "status error";
+            }
+        }
+
+        async function loadOPPTable() {
+            try {
+                let opp_table = await runCmd(`cat ${KS_PARAMS_PATH}opp_table`);
+                if (opp_table && !opp_table.includes("No such file")) {
+                    document.getElementById('opp_table_display').innerText = opp_table.trim() || "No frequencies captured yet.";
+                } else {
+                    document.getElementById('opp_table_display').innerText = "Module not loaded or OPP table unavailable.";
+                }
+            } catch (e) {
+                document.getElementById('opp_table_display').innerText = "Error fetching OPP table.";
+            }
+        }
+
+        async function applySettings() {
+            let cpu_oc = document.getElementById('cpu_oc').value;
+            let cpu_uv = document.getElementById('cpu_uv').value;
+            let gpu_oc = document.getElementById('gpu_oc').value;
+            let gpu_uv = document.getElementById('gpu_uv').value;
+
+            let cmds = [
+                `echo ${cpu_oc} > ${KS_PARAMS_PATH}cpu_oc_percent`,
+                `echo ${cpu_uv} > ${KS_PARAMS_PATH}cpu_uvolt_offset`,
+                `echo ${gpu_oc} > ${KS_PARAMS_PATH}gpu_oc_percent`,
+                `echo ${gpu_uv} > ${KS_PARAMS_PATH}gpu_uvolt_offset`,
+                `echo 1 > ${KS_PARAMS_PATH}apply`
+            ];
+
+            let success = true;
+            for (let cmd of cmds) {
+                let res = await runCmd(cmd);
+                if (res && res.includes("No such file")) success = false;
+            }
+
+            let statusEl = document.getElementById('status-msg');
+            if (success) {
+                statusEl.innerText = "Settings applied successfully! Restart device to ensure full OPP table injection.";
+                statusEl.className = "status";
+            } else {
+                statusEl.innerText = "Error: Module not loaded or KSU denied root.";
+                statusEl.className = "status error";
+            }
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            loadCurrentSettings();
+            loadOPPTable();
+        });
+    </script>
+</body>
+</html>
