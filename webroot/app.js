@@ -1,5 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   KPM OC Manager v2.0 — Application Logic
+   KPM OC Manager v3.0 — Application Logic
+   Headwolf F8 · Dimensity 8300 (MT8792 / MT6897)
+   CPU: CSRAM LUT via kpm_oc.ko + sysfs scaling
+   GPU: /proc/gpufreqv2 interface
    ═══════════════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -9,6 +12,12 @@
   const KS_PARAMS = '/sys/module/kpm_oc/parameters/';
   const CONFIG_DIR = '/data/adb/modules/f8_kpm_oc_manager';
   const CONFIG_FILE = `${CONFIG_DIR}/oc_config.json`;
+  const CPU_OPP_FILE = `${CONFIG_DIR}/cpu_opp_table`;
+  const GPU_OPP_FILE = `${CONFIG_DIR}/gpu_opp_table`;
+
+  const CPU_POLICIES = [0, 4, 7];
+  const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
+  const CLUSTER_CORES = { 0: 'Cortex-A520', 4: 'Cortex-A720', 7: 'Cortex-A720' };
 
   /* ─── State ───────────────────────────────────────────────────────── */
   const state = {
@@ -18,19 +27,11 @@
     gpuEntries: [],
     originalCpu: [],
     originalGpu: [],
-    pendingChanges: [],
-    settings: {
-      cpu_oc_percent: 0,
-      cpu_uvolt_offset: 0,
-      gpu_oc_percent: 0,
-      gpu_uvolt_offset: 0,
-    },
   };
 
   /* ─── Shell Command Execution ─────────────────────────────────────── */
   async function exec(cmd) {
     return new Promise((resolve) => {
-      // APatch / KernelSU WebUI API
       if (typeof ksu !== 'undefined' && ksu.exec) {
         ksu.exec(cmd, '{}', (result) => {
           try {
@@ -41,7 +42,6 @@
           }
         });
       } else {
-        // Desktop mock for development
         console.log('[MOCK] exec:', cmd);
         resolve(getMockResponse(cmd));
       }
@@ -50,142 +50,128 @@
 
   /* ─── Mock Data for Desktop Preview ───────────────────────────────── */
   function getMockResponse(cmd) {
-    if (cmd.includes('cat') && cmd.includes('opp_table')) {
+    if (cmd.includes('opp_table') || cmd.includes('cpu_opp_table')) {
       return {
         errno: 0,
-        stdout: 'CPU:0:500000000:850000|CPU:0:850000000:900000|CPU:0:1000000000:950000|CPU:0:1200000000:1000000|CPU:0:1400000000:1050000|CPU:0:1600000000:1100000|CPU:0:1800000000:1150000|CPU:0:2000000000:1200000|CPU:1:500000000:850000|CPU:1:850000000:900000|CPU:1:1200000000:975000|CPU:1:1600000000:1050000|CPU:1:2000000000:1125000|CPU:1:2200000000:1200000|CPU:1:2400000000:1275000|GPU:0:300000000:700000|GPU:0:400000000:750000|GPU:0:500000000:800000|GPU:0:600000000:850000|GPU:0:700000000:900000|GPU:0:800000000:950000',
+        stdout: 'CPU:0:480000:650000|CPU:0:850000:725000|CPU:0:1200000:800000|CPU:0:1600000:875000|CPU:0:2000000:950000|CPU:0:2200000:1000000|CPU:4:400000:650000|CPU:4:850000:725000|CPU:4:1400000:825000|CPU:4:2000000:925000|CPU:4:2600000:1000000|CPU:4:3200000:1100000|CPU:7:400000:650000|CPU:7:1000000:750000|CPU:7:1600000:850000|CPU:7:2200000:950000|CPU:7:2800000:1025000|CPU:7:3350000:1125000',
         stderr: ''
       };
     }
-    if (cmd.includes('cat') && cmd.includes('cpu_oc_percent'))
-      return { errno: 0, stdout: '0', stderr: '' };
-    if (cmd.includes('cat') && cmd.includes('cpu_uvolt_offset'))
-      return { errno: 0, stdout: '0', stderr: '' };
-    if (cmd.includes('cat') && cmd.includes('gpu_oc_percent'))
-      return { errno: 0, stdout: '0', stderr: '' };
-    if (cmd.includes('cat') && cmd.includes('gpu_uvolt_offset'))
-      return { errno: 0, stdout: '0', stderr: '' };
-    if (cmd.includes('scaling_available_frequencies'))
-      return { errno: 0, stdout: '500000 850000 1000000 1200000 1400000 1600000 1800000 2000000', stderr: '' };
-    if (cmd.includes('available_frequencies'))
-      return { errno: 0, stdout: '300000000 400000000 500000000 600000000 700000000 800000000', stderr: '' };
+    if (cmd.includes('gpu_working_opp_table') || cmd.includes('gpu_opp_table')) {
+      return {
+        errno: 0,
+        stdout: '[00] freq: 265000, volt: 57500, vsram: 75000\n[01] freq: 350000, volt: 60000, vsram: 75000\n[02] freq: 480000, volt: 63125, vsram: 75000\n[03] freq: 650000, volt: 68750, vsram: 75000\n[04] freq: 850000, volt: 75000, vsram: 75000\n[05] freq: 1000000, volt: 78125, vsram: 78125\n[06] freq: 1200000, volt: 81875, vsram: 81875\n[07] freq: 1400000, volt: 87500, vsram: 87500',
+        stderr: ''
+      };
+    }
+    if (cmd.includes('scaling_available_frequencies') && cmd.includes('policy0')) {
+      return { errno: 0, stdout: '480000 650000 850000 1000000 1200000 1400000 1600000 1800000 2000000 2200000', stderr: '' };
+    }
+    if (cmd.includes('scaling_available_frequencies') && cmd.includes('policy4')) {
+      return { errno: 0, stdout: '400000 550000 725000 850000 1000000 1200000 1400000 1600000 1800000 2000000 2200000 2400000 2600000 2800000 3000000 3200000', stderr: '' };
+    }
+    if (cmd.includes('scaling_available_frequencies') && cmd.includes('policy7')) {
+      return { errno: 0, stdout: '400000 550000 725000 850000 1000000 1200000 1400000 1600000 1800000 2000000 2200000 2400000 2600000 2800000 3000000 3200000 3350000', stderr: '' };
+    }
+    if (cmd.includes('scaling_max_freq') && !cmd.includes('echo')) {
+      if (cmd.includes('policy0')) return { errno: 0, stdout: '2200000', stderr: '' };
+      if (cmd.includes('policy4')) return { errno: 0, stdout: '3200000', stderr: '' };
+      if (cmd.includes('policy7')) return { errno: 0, stdout: '3350000', stderr: '' };
+    }
+    if (cmd.includes('scaling_min_freq') && !cmd.includes('echo')) {
+      return { errno: 0, stdout: '400000', stderr: '' };
+    }
+    if (cmd.includes('lsmod') && cmd.includes('kpm_oc')) {
+      return { errno: 0, stdout: 'kpm_oc 16384 0', stderr: '' };
+    }
     return { errno: 0, stdout: '', stderr: '' };
   }
 
-  /* ─── OPP Data Parsing ────────────────────────────────────────────── */
-  function parseOppTable(raw) {
-    const entries = raw.trim().split('|').filter(s => s.length > 0);
+  /* ─── Data Parsing ────────────────────────────────────────────────── */
+  function parseCpuOppTable(raw) {
     const cpuMap = new Map();
-    const gpuList = [];
+    const entries = raw.trim().split('|').filter(s => s.length > 0);
 
     for (const entry of entries) {
       const parts = entry.split(':');
-      if (parts.length !== 4) continue;
+      if (parts.length !== 4 || parts[0] !== 'CPU') continue;
 
-      const [type, clusterId, freqStr, uvoltStr] = parts;
-      const freq = parseInt(freqStr, 10);
-      const uvolt = parseInt(uvoltStr, 10);
+      const policy = parseInt(parts[1], 10);
+      const freq = parseInt(parts[2], 10);   // KHz
+      const volt = parseInt(parts[3], 10);   // µV
 
-      if (isNaN(freq) || isNaN(uvolt)) continue;
+      if (isNaN(freq) || isNaN(volt)) continue;
 
-      const item = {
-        type,
-        clusterId: parseInt(clusterId, 10),
-        freq,
-        uvolt,
-        origFreq: freq,
-        origUvolt: uvolt,
-        modified: false,
-        isNew: false,
-        removing: false,
-      };
-
-      if (type === 'CPU') {
-        if (!cpuMap.has(item.clusterId)) cpuMap.set(item.clusterId, []);
-        cpuMap.get(item.clusterId).push(item);
-      } else if (type === 'GPU') {
-        gpuList.push(item);
-      }
+      if (!cpuMap.has(policy)) cpuMap.set(policy, []);
+      cpuMap.get(policy).push({
+        freq, volt,
+        origFreq: freq, origVolt: volt,
+        modified: false, isNew: false, removing: false,
+      });
     }
 
-    // Sort each cluster by frequency
     for (const [, list] of cpuMap) {
       list.sort((a, b) => a.freq - b.freq);
-    }
-    gpuList.sort((a, b) => a.freq - b.freq);
-
-    return { cpuMap, gpuList };
-  }
-
-  /* ─── Sysfs Fallback: Read CPU Frequencies ────────────────────────── */
-  async function readCpuFreqsSysfs() {
-    const cpuMap = new Map();
-    for (let policy = 0; policy < 8; policy++) {
-      const path = `/sys/devices/system/cpu/cpufreq/policy${policy}`;
-      const res = await exec(`cat ${path}/scaling_available_frequencies 2>/dev/null`);
-      if (res.errno !== 0 || !res.stdout.trim()) continue;
-
-      const freqs = res.stdout.trim().split(/\s+/).map(f => parseInt(f, 10) * 1000);
-      const clusterId = policy;
-
-      if (!cpuMap.has(clusterId)) cpuMap.set(clusterId, []);
-      for (const freq of freqs) {
-        cpuMap.get(clusterId).push({
-          type: 'CPU', clusterId, freq, uvolt: 0,
-          origFreq: freq, origUvolt: 0, modified: false, isNew: false, removing: false,
-        });
-      }
     }
     return cpuMap;
   }
 
-  /* ─── Sysfs Fallback: Read GPU Frequencies ────────────────────────── */
-  async function readGpuFreqsSysfs() {
-    const gpuList = [];
-    const paths = [
-      '/sys/class/devfreq',
-    ];
+  function parseGpuOppTable(raw) {
+    const entries = [];
+    const lines = raw.trim().split('\n');
 
-    // Find GPU devfreq device
-    const findRes = await exec(`ls /sys/class/devfreq/ 2>/dev/null | head -10`);
-    if (findRes.stdout) {
-      const devfreqDevices = findRes.stdout.trim().split('\n');
-      for (const dev of devfreqDevices) {
-        const freqRes = await exec(`cat /sys/class/devfreq/${dev}/available_frequencies 2>/dev/null`);
-        if (freqRes.stdout && freqRes.stdout.trim()) {
-          const devNameLower = dev.toLowerCase();
-          if (devNameLower.includes('gpu') || devNameLower.includes('mali') ||
-              devNameLower.includes('sgpu') || devNameLower.includes('pvr')) {
-            const freqs = freqRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10));
-            for (const freq of freqs) {
-              gpuList.push({
-                type: 'GPU', clusterId: 0, freq, uvolt: 0,
-                origFreq: freq, origUvolt: 0, modified: false, isNew: false, removing: false,
-              });
-            }
-            break;
-          }
-        }
-      }
+    for (const line of lines) {
+      const m = line.match(/freq:\s*(\d+),\s*volt:\s*(\d+)(?:,\s*vsram:\s*(\d+))?/);
+      if (!m) continue;
+
+      const freq = parseInt(m[1], 10);     // KHz
+      const volt = parseInt(m[2], 10);     // gpufreqv2 step (×10 = µV)
+      const vsram = m[3] ? parseInt(m[3], 10) : 0;
+
+      entries.push({
+        freq,
+        volt: volt * 10,       // Convert to µV
+        vsram: vsram * 10,     // Convert to µV
+        origFreq: freq,
+        origVolt: volt * 10,
+        modified: false, isNew: false, removing: false,
+      });
     }
 
-    gpuList.sort((a, b) => a.freq - b.freq);
-    return gpuList;
+    entries.sort((a, b) => a.freq - b.freq);
+    return entries;
+  }
+
+  function parseGpuPreParsed(raw) {
+    const entries = [];
+    const items = raw.trim().split('|').filter(s => s.length > 0);
+    for (const item of items) {
+      const parts = item.split(':');
+      if (parts.length !== 4 || parts[0] !== 'GPU') continue;
+      const freq = parseInt(parts[2], 10);
+      const volt = parseInt(parts[3], 10);
+      if (isNaN(freq) || isNaN(volt)) continue;
+      entries.push({
+        freq, volt, vsram: 0,
+        origFreq: freq, origVolt: volt,
+        modified: false, isNew: false, removing: false,
+      });
+    }
+    entries.sort((a, b) => a.freq - b.freq);
+    return entries;
   }
 
   /* ─── Format Helpers ──────────────────────────────────────────────── */
-  function formatFreq(hz) {
-    if (hz >= 1000000000) return (hz / 1000000000).toFixed(2) + ' GHz';
-    if (hz >= 1000000) return (hz / 1000000).toFixed(0) + ' MHz';
-    if (hz >= 1000) return (hz / 1000).toFixed(0) + ' KHz';
-    return hz + ' Hz';
+  function formatFreqKHz(khz) {
+    if (khz >= 1000000) return (khz / 1000000).toFixed(2) + ' GHz';
+    if (khz >= 1000) return (khz / 1000).toFixed(0) + ' MHz';
+    return khz + ' KHz';
   }
 
-  function formatVolt(uv) {
-    if (uv === 0) return 'N/A';
-    if (uv >= 1000000) return (uv / 1000000).toFixed(3) + ' V';
-    if (uv >= 1000) return (uv / 1000).toFixed(1) + ' mV';
-    return uv + ' µV';
+  function formatVoltUv(uv) {
+    if (uv === 0) return '—';
+    if (uv >= 1000000) return (uv / 1000000).toFixed(4) + ' V';
+    return (uv / 1000).toFixed(1) + ' mV';
   }
 
   /* ─── Toast Notifications ─────────────────────────────────────────── */
@@ -211,12 +197,9 @@
       btn.addEventListener('click', () => {
         const tab = btn.dataset.tab;
         if (tab === state.activeTab) return;
-
         state.activeTab = tab;
-
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-
         document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
         const target = document.querySelector(`.tab-content[data-tab="${tab}"]`);
         if (target) target.classList.add('active');
@@ -224,82 +207,214 @@
     });
   }
 
-  /* ─── Render OPP Table ────────────────────────────────────────────── */
-  function renderOppTable(entries, containerId, type, clusterId) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
+  /* ─── Render CPU Cluster Card ─────────────────────────────────────── */
+  function renderCpuCluster(cluster) {
+    const name = CLUSTER_NAMES[cluster.id] || `Policy ${cluster.id}`;
+    const core = CLUSTER_CORES[cluster.id] || '';
+    const entries = cluster.entries;
+    const maxFreq = entries.length > 0 ? Math.max(...entries.map(e => e.freq)) : 0;
+    const maxFreqStr = maxFreq > 0 ? formatFreqKHz(maxFreq) : '—';
 
-    if (!entries || entries.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <div class="icon">${type === 'CPU' ? '⚡' : '🎮'}</div>
-          <p>No OPP entries found.<br>Tap "Scan & Load" to read from kernel.</p>
-        </div>`;
-      return;
-    }
-
-    const maxFreq = Math.max(...entries.map(e => e.freq));
+    const freqOptions = (cluster.freqs || []).map(f =>
+      `<option value="${f}">${formatFreqKHz(f)}</option>`
+    ).join('');
 
     let html = `
-      <div class="opp-table-wrapper">
-        <table class="opp-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Frequency</th>
-              <th>Voltage</th>
-              <th style="width:28px"></th>
-              <th style="width:60px"></th>
-            </tr>
-          </thead>
-          <tbody>`;
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">⚡</span>
+            CPU ${name}
+            <span style="font-size:0.75rem;color:var(--text-muted);margin-left:4px">${core}</span>
+          </div>
+          <div>
+            <span class="card-badge cpu">${entries.length} OPPs</span>
+            <span class="info-chip freq" style="margin-left:4px">Max: ${maxFreqStr}</span>
+          </div>
+        </div>
+
+        <div class="config-row">
+          <div><div class="config-label">Max Freq</div></div>
+          <select class="config-input freq-limit-select" id="cpu-max-freq-${cluster.id}"
+                  data-policy="${cluster.id}" data-type="max">
+            ${freqOptions}
+          </select>
+        </div>
+        <div class="config-row">
+          <div><div class="config-label">Min Freq</div></div>
+          <select class="config-input freq-limit-select" id="cpu-min-freq-${cluster.id}"
+                  data-policy="${cluster.id}" data-type="min">
+            ${freqOptions}
+          </select>
+        </div>
+
+        <div class="opp-table-wrapper">
+          <table class="opp-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Freq (KHz)</th>
+                <th>Voltage (µV)</th>
+                <th></th>
+                <th style="width:60px"></th>
+              </tr>
+            </thead>
+            <tbody>`;
 
     entries.forEach((entry, idx) => {
       const rowClass = entry.removing ? 'removing' :
                        entry.isNew ? 'new-entry' :
-                       entry.modified ? (type === 'GPU' ? 'modified gpu-row' : 'modified') : '';
+                       entry.modified ? 'modified' : '';
       const pct = maxFreq > 0 ? (entry.freq / maxFreq * 100) : 0;
-      const barClass = type === 'GPU' ? 'gpu' : 'cpu';
 
       html += `
-        <tr class="${rowClass}" data-idx="${idx}">
-          <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
-          <td>
-            <input type="number" class="cell-input" value="${entry.freq}"
-                   data-field="freq" data-type="${type}" data-cluster="${clusterId}" data-idx="${idx}"
-                   onchange="window.OC.onCellChange(this)">
-            <div class="freq-bar" style="margin-top:3px">
-              <div class="freq-bar-fill ${barClass}" style="width:${pct}%"></div>
-            </div>
-          </td>
-          <td>
-            <input type="number" class="cell-input" value="${entry.uvolt}"
-                   data-field="uvolt" data-type="${type}" data-cluster="${clusterId}" data-idx="${idx}"
-                   onchange="window.OC.onCellChange(this)">
-          </td>
-          <td>
-            <div class="info-chip freq">${formatFreq(entry.freq)}</div>
-          </td>
-          <td>
-            <div class="row-actions">
-              ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="Restore" onclick="window.OC.restoreRow('${type}', ${clusterId}, ${idx})">↩</button>` : ''}
-              <button class="btn-icon danger" title="Remove" onclick="window.OC.removeRow('${type}', ${clusterId}, ${idx})">✕</button>
-            </div>
-          </td>
-        </tr>`;
+              <tr class="${rowClass}" data-idx="${idx}">
+                <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
+                <td>
+                  <input type="number" class="cell-input" value="${entry.freq}"
+                         data-field="freq" data-type="CPU" data-cluster="${cluster.id}" data-idx="${idx}"
+                         onchange="window.OC.onCellChange(this)">
+                  <div class="freq-bar" style="margin-top:3px">
+                    <div class="freq-bar-fill cpu" style="width:${pct}%"></div>
+                  </div>
+                </td>
+                <td>
+                  <input type="number" class="cell-input" value="${entry.volt}"
+                         data-field="volt" data-type="CPU" data-cluster="${cluster.id}" data-idx="${idx}"
+                         onchange="window.OC.onCellChange(this)">
+                </td>
+                <td>
+                  <div class="info-chip freq">${formatFreqKHz(entry.freq)}</div>
+                  <div class="info-chip volt">${formatVoltUv(entry.volt)}</div>
+                </td>
+                <td>
+                  <div class="row-actions">
+                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="Restore" onclick="window.OC.restoreRow('CPU', ${cluster.id}, ${idx})">↩</button>` : ''}
+                    <button class="btn-icon danger" title="Remove" onclick="window.OC.removeRow('CPU', ${cluster.id}, ${idx})">✕</button>
+                  </div>
+                </td>
+              </tr>`;
     });
 
     html += `
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
+
+        <div id="cpu-add-form-${cluster.id}" class="add-form">
+          <div class="add-form-row">
+            <input type="number" class="cell-input" placeholder="Freq (KHz)" id="add-cpu-freq-${cluster.id}">
+            <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-cpu-volt-${cluster.id}">
+            <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('CPU', ${cluster.id})">✓</button>
+            <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">✕</button>
+          </div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">
+            + Add Entry
+          </button>
+        </div>
       </div>`;
 
-    container.innerHTML = html;
+    return html;
+  }
+
+  /* ─── Render GPU Card ─────────────────────────────────────────────── */
+  function renderGpuCard() {
+    const entries = state.gpuEntries;
+    const maxFreq = entries.length > 0 ? Math.max(...entries.map(e => e.freq)) : 0;
+    const maxFreqStr = maxFreq > 0 ? formatFreqKHz(maxFreq) : '—';
+
+    let html = `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🎮</span>
+            GPU · Mali
+          </div>
+          <div>
+            <span class="card-badge gpu">${entries.length} OPPs</span>
+            <span class="info-chip volt" style="margin-left:4px">Max: ${maxFreqStr}</span>
+          </div>
+        </div>
+
+        <div class="opp-table-wrapper">
+          <table class="opp-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Freq (KHz)</th>
+                <th>Voltage (µV)</th>
+                <th>VSRAM (µV)</th>
+                <th></th>
+                <th style="width:60px"></th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+    entries.forEach((entry, idx) => {
+      const rowClass = entry.removing ? 'removing' :
+                       entry.isNew ? 'new-entry' :
+                       entry.modified ? 'modified gpu-row' : '';
+      const pct = maxFreq > 0 ? (entry.freq / maxFreq * 100) : 0;
+
+      html += `
+              <tr class="${rowClass}" data-idx="${idx}">
+                <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
+                <td>
+                  <input type="number" class="cell-input" value="${entry.freq}"
+                         data-field="freq" data-type="GPU" data-cluster="0" data-idx="${idx}"
+                         onchange="window.OC.onCellChange(this)">
+                  <div class="freq-bar" style="margin-top:3px">
+                    <div class="freq-bar-fill gpu" style="width:${pct}%"></div>
+                  </div>
+                </td>
+                <td>
+                  <input type="number" class="cell-input" value="${entry.volt}"
+                         data-field="volt" data-type="GPU" data-cluster="0" data-idx="${idx}"
+                         onchange="window.OC.onCellChange(this)">
+                </td>
+                <td>
+                  <span class="cell-static" style="color:var(--text-secondary)">${entry.vsram > 0 ? formatVoltUv(entry.vsram) : '—'}</span>
+                </td>
+                <td>
+                  <div class="info-chip freq">${formatFreqKHz(entry.freq)}</div>
+                  <div class="info-chip volt">${formatVoltUv(entry.volt)}</div>
+                </td>
+                <td>
+                  <div class="row-actions">
+                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="Restore" onclick="window.OC.restoreRow('GPU', 0, ${idx})">↩</button>` : ''}
+                    <button class="btn-icon danger" title="Remove" onclick="window.OC.removeRow('GPU', 0, ${idx})">✕</button>
+                  </div>
+                </td>
+              </tr>`;
+    });
+
+    html += `
+            </tbody>
+          </table>
+        </div>
+
+        <div id="gpu-add-form-0" class="add-form">
+          <div class="add-form-row">
+            <input type="number" class="cell-input" placeholder="Freq (KHz)" id="add-gpu-freq-0">
+            <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-gpu-volt-0">
+            <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('GPU', 0)">✓</button>
+            <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">✕</button>
+          </div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">
+            + Add Entry
+          </button>
+        </div>
+      </div>`;
+
+    return html;
   }
 
   /* ─── Render All ──────────────────────────────────────────────────── */
   function renderAll() {
-    // CPU clusters
     const cpuContainer = document.getElementById('cpu-clusters');
     if (cpuContainer) {
       if (state.cpuClusters.length === 0) {
@@ -307,55 +422,20 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">⚡</div>
-              <p>No CPU data loaded.<br>Tap "Scan & Load" to read OPP tables from the kernel.</p>
+              <p>No CPU data loaded.<br>Tap "Reload" to read OPP tables.</p>
             </div>
           </div>`;
       } else {
-        let html = '';
-        state.cpuClusters.forEach((cluster, ci) => {
-          const clusterNames = ['LITTLE', 'big', 'PRIME', 'Ultra'];
-          const clusterName = clusterNames[ci] || `Cluster ${cluster.id}`;
-          const entryCount = cluster.entries.length;
-          const maxFreqStr = entryCount > 0 ? formatFreq(Math.max(...cluster.entries.map(e => e.freq))) : 'N/A';
-
-          html += `
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">
-                  <span class="icon">⚡</span>
-                  CPU ${clusterName}
-                </div>
-                <div>
-                  <span class="card-badge cpu">${entryCount} OPPs</span>
-                  <span class="info-chip freq" style="margin-left:4px">Max: ${maxFreqStr}</span>
-                </div>
-              </div>
-              <div id="cpu-table-${cluster.id}"></div>
-              <div id="cpu-add-form-${cluster.id}" class="add-form">
-                <div class="add-form-row">
-                  <input type="number" class="cell-input" placeholder="Freq (Hz)" id="add-cpu-freq-${cluster.id}">
-                  <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-cpu-uvolt-${cluster.id}">
-                  <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('CPU', ${cluster.id})">✓</button>
-                  <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">✕</button>
-                </div>
-              </div>
-              <div class="btn-group">
-                <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">
-                  + Add Entry
-                </button>
-              </div>
-            </div>`;
-        });
-        cpuContainer.innerHTML = html;
-
-        // Render tables
+        cpuContainer.innerHTML = state.cpuClusters.map(c => renderCpuCluster(c)).join('');
         state.cpuClusters.forEach(cluster => {
-          renderOppTable(cluster.entries, `cpu-table-${cluster.id}`, 'CPU', cluster.id);
+          const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
+          const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
+          if (maxSel && cluster.curMax) maxSel.value = cluster.curMax;
+          if (minSel && cluster.curMin) minSel.value = cluster.curMin;
         });
       }
     }
 
-    // GPU
     const gpuContainer = document.getElementById('gpu-devices');
     if (gpuContainer) {
       if (state.gpuEntries.length === 0) {
@@ -363,134 +443,103 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">🎮</div>
-              <p>No GPU data loaded.<br>Tap "Scan & Load" to read OPP tables from the kernel.</p>
+              <p>No GPU data loaded.<br>Tap "Reload" to read OPP tables.</p>
             </div>
           </div>`;
       } else {
-        const entryCount = state.gpuEntries.length;
-        const maxFreqStr = entryCount > 0 ? formatFreq(Math.max(...state.gpuEntries.map(e => e.freq))) : 'N/A';
-
-        gpuContainer.innerHTML = `
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">🎮</span>
-                GPU (Mali)
-              </div>
-              <div>
-                <span class="card-badge gpu">${entryCount} OPPs</span>
-                <span class="info-chip volt" style="margin-left:4px">Max: ${maxFreqStr}</span>
-              </div>
-            </div>
-            <div id="gpu-table-0"></div>
-            <div id="gpu-add-form-0" class="add-form">
-              <div class="add-form-row">
-                <input type="number" class="cell-input" placeholder="Freq (Hz)" id="add-gpu-freq-0">
-                <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-gpu-uvolt-0">
-                <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('GPU', 0)">✓</button>
-                <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">✕</button>
-              </div>
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">
-                + Add Entry
-              </button>
-            </div>
-          </div>`;
-
-        renderOppTable(state.gpuEntries, 'gpu-table-0', 'GPU', 0);
+        gpuContainer.innerHTML = renderGpuCard();
       }
     }
-
-    // Settings
-    updateSettingsUI();
-  }
-
-  function updateSettingsUI() {
-    const fields = ['cpu_oc_percent', 'cpu_uvolt_offset', 'gpu_oc_percent', 'gpu_uvolt_offset'];
-    fields.forEach(f => {
-      const el = document.getElementById(f);
-      if (el) el.value = state.settings[f];
-    });
   }
 
   /* ─── Data Loading ────────────────────────────────────────────────── */
   async function loadData() {
     showToast('Loading OPP data...', 'info');
 
-    // Read module status
-    const modCheck = await exec(`cat ${KS_PARAMS}opp_table 2>/dev/null`);
-    state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.trim().length > 0 && !modCheck.stdout.includes('No such file');
-
+    const modCheck = await exec(`lsmod 2>/dev/null | grep kpm_oc`);
+    state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.includes('kpm_oc');
     updateModuleStatus();
 
+    // --- CPU Data ---
     let cpuMap = new Map();
-    let gpuList = [];
 
-    if (state.moduleLoaded && modCheck.stdout.trim().length > 5) {
-      // Parse structured data from kernel module
-      const parsed = parseOppTable(modCheck.stdout);
-      cpuMap = parsed.cpuMap;
-      gpuList = parsed.gpuList;
+    const cpuRes = await exec(`cat ${KS_PARAMS}opp_table 2>/dev/null`);
+    if (cpuRes.stdout.trim().length > 5 && cpuRes.stdout.includes('CPU:')) {
+      cpuMap = parseCpuOppTable(cpuRes.stdout);
     }
 
-    // If kernel module has no data, try sysfs fallback
     if (cpuMap.size === 0) {
-      cpuMap = await readCpuFreqsSysfs();
-    }
-    if (gpuList.length === 0) {
-      gpuList = await readGpuFreqsSysfs();
+      const fileRes = await exec(`cat ${CPU_OPP_FILE} 2>/dev/null`);
+      if (fileRes.stdout.trim().length > 5 && fileRes.stdout.includes('CPU:')) {
+        cpuMap = parseCpuOppTable(fileRes.stdout);
+      }
     }
 
-    // Store state
     state.cpuClusters = [];
-    for (const [clusterId, entries] of cpuMap) {
-      state.cpuClusters.push({ id: clusterId, entries: [...entries] });
+    for (const policy of CPU_POLICIES) {
+      const freqRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_available_frequencies 2>/dev/null`);
+      const freqs = freqRes.stdout.trim()
+        ? freqRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b)
+        : [];
+
+      const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null`);
+      const minRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_min_freq 2>/dev/null`);
+
+      state.cpuClusters.push({
+        id: policy,
+        entries: cpuMap.get(policy) || [],
+        freqs,
+        curMax: parseInt(maxRes.stdout.trim(), 10) || (freqs.length > 0 ? freqs[freqs.length - 1] : 0),
+        curMin: parseInt(minRes.stdout.trim(), 10) || (freqs.length > 0 ? freqs[0] : 0),
+      });
     }
-    state.cpuClusters.sort((a, b) => a.id - b.id);
 
-    state.gpuEntries = [...gpuList];
+    // --- GPU Data ---
+    state.gpuEntries = [];
 
-    // Store originals for restore
+    const gpuRes = await exec(`cat /proc/gpufreqv2/gpu_working_opp_table 2>/dev/null`);
+    if (gpuRes.stdout.includes('freq:')) {
+      state.gpuEntries = parseGpuOppTable(gpuRes.stdout);
+    }
+
+    if (state.gpuEntries.length === 0) {
+      const gpuFileRes = await exec(`cat ${GPU_OPP_FILE} 2>/dev/null`);
+      if (gpuFileRes.stdout.trim().length > 5) {
+        if (gpuFileRes.stdout.includes('freq:')) {
+          state.gpuEntries = parseGpuOppTable(gpuFileRes.stdout);
+        } else if (gpuFileRes.stdout.includes('GPU:')) {
+          state.gpuEntries = parseGpuPreParsed(gpuFileRes.stdout);
+        }
+      }
+    }
+
     state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
     state.originalGpu = JSON.parse(JSON.stringify(state.gpuEntries));
 
-    // Load settings
-    await loadSettings();
-
     renderAll();
-    showToast('OPP data loaded successfully', 'success');
-  }
-
-  async function loadSettings() {
-    const fields = ['cpu_oc_percent', 'cpu_uvolt_offset', 'gpu_oc_percent', 'gpu_uvolt_offset'];
-    for (const field of fields) {
-      const res = await exec(`cat ${KS_PARAMS}${field} 2>/dev/null`);
-      if (res.stdout && !res.stdout.includes('No such file')) {
-        const val = parseInt(res.stdout.trim(), 10);
-        if (!isNaN(val)) state.settings[field] = val;
-      }
-    }
+    const cpuCount = state.cpuClusters.reduce((s, c) => s + c.entries.length, 0);
+    showToast(`Loaded: CPU ${cpuCount} OPPs, GPU ${state.gpuEntries.length} OPPs`, 'success');
   }
 
   function updateModuleStatus() {
     const badge = document.getElementById('module-status');
-    if (badge) {
-      if (state.moduleLoaded) {
-        badge.className = 'status-badge online';
-        badge.innerHTML = '<span class="status-dot"></span> Module Active';
-      } else {
-        badge.className = 'status-badge offline';
-        badge.innerHTML = '<span class="status-dot"></span> Module Not Loaded';
-      }
+    if (!badge) return;
+    if (state.moduleLoaded) {
+      badge.className = 'status-badge online';
+      badge.innerHTML = '<span class="status-dot"></span> Module Active';
+    } else {
+      badge.className = 'status-badge offline';
+      badge.innerHTML = '<span class="status-dot"></span> Module Not Loaded';
     }
   }
 
   /* ─── Scan & Reload ───────────────────────────────────────────────── */
   async function scanAndLoad() {
-    showToast('Triggering kernel OPP scan...', 'info');
-    await exec(`echo 1 > ${KS_PARAMS}apply 2>/dev/null`);
-    await new Promise(r => setTimeout(r, 500));
+    showToast('Reloading OPP data...', 'info');
+    if (state.moduleLoaded) {
+      await exec(`echo 1 > ${KS_PARAMS}apply 2>/dev/null`);
+      await new Promise(r => setTimeout(r, 500));
+    }
     await loadData();
   }
 
@@ -510,19 +559,16 @@
     let entry;
     if (type === 'CPU') {
       const cluster = state.cpuClusters.find(c => c.id === clusterId);
-      if (cluster && cluster.entries[idx]) entry = cluster.entries[idx];
-    } else if (type === 'GPU') {
+      if (cluster) entry = cluster.entries[idx];
+    } else {
       entry = state.gpuEntries[idx];
     }
-
     if (!entry) return;
 
     entry[field] = newValue;
-    entry.modified = (entry.freq !== entry.origFreq || entry.uvolt !== entry.origUvolt);
+    entry.modified = (entry.freq !== entry.origFreq || entry.volt !== entry.origVolt);
 
     input.classList.toggle('modified', entry.modified);
-
-    // Mark row
     const row = input.closest('tr');
     if (row) {
       row.classList.toggle('modified', entry.modified && !entry.isNew);
@@ -530,7 +576,7 @@
     }
   }
 
-  /* ─── Add Entry ───────────────────────────────────────────────────── */
+  /* ─── Add / Remove / Restore ──────────────────────────────────────── */
   function toggleAddForm(type, clusterId) {
     const form = document.getElementById(`${type.toLowerCase()}-add-form-${clusterId}`);
     if (form) form.classList.toggle('visible');
@@ -538,25 +584,18 @@
 
   function confirmAddEntry(type, clusterId) {
     const freqInput = document.getElementById(`add-${type.toLowerCase()}-freq-${clusterId}`);
-    const uvoltInput = document.getElementById(`add-${type.toLowerCase()}-uvolt-${clusterId}`);
-
-    if (!freqInput || !uvoltInput) return;
+    const voltInput = document.getElementById(`add-${type.toLowerCase()}-volt-${clusterId}`);
+    if (!freqInput || !voltInput) return;
 
     const freq = parseInt(freqInput.value, 10);
-    const uvolt = parseInt(uvoltInput.value, 10);
+    const volt = parseInt(voltInput.value, 10);
 
-    if (isNaN(freq) || freq <= 0) {
-      showToast('Invalid frequency value', 'error');
-      return;
-    }
-    if (isNaN(uvolt) || uvolt <= 0) {
-      showToast('Invalid voltage value', 'error');
-      return;
-    }
+    if (isNaN(freq) || freq <= 0) { showToast('Invalid frequency', 'error'); return; }
+    if (isNaN(volt) || volt <= 0) { showToast('Invalid voltage', 'error'); return; }
 
     const newEntry = {
-      type, clusterId, freq, uvolt,
-      origFreq: 0, origUvolt: 0,
+      freq, volt, vsram: 0,
+      origFreq: 0, origVolt: 0,
       modified: false, isNew: true, removing: false,
     };
 
@@ -571,63 +610,55 @@
       state.gpuEntries.sort((a, b) => a.freq - b.freq);
     }
 
-    // Clear inputs and hide form
     freqInput.value = '';
-    uvoltInput.value = '';
+    voltInput.value = '';
     toggleAddForm(type, clusterId);
-
     renderAll();
-    showToast(`New ${type} OPP entry added (${formatFreq(freq)})`, 'success');
+    showToast(`New ${type} OPP added (${formatFreqKHz(freq)})`, 'success');
   }
 
-  /* ─── Remove Entry ────────────────────────────────────────────────── */
   function removeRow(type, clusterId, idx) {
     if (type === 'CPU') {
       const cluster = state.cpuClusters.find(c => c.id === clusterId);
-      if (cluster && cluster.entries[idx]) {
-        if (cluster.entries[idx].isNew) {
-          cluster.entries.splice(idx, 1);
-        } else {
-          cluster.entries[idx].removing = !cluster.entries[idx].removing;
-        }
+      if (!cluster || !cluster.entries[idx]) return;
+      if (cluster.entries[idx].isNew) {
+        cluster.entries.splice(idx, 1);
+      } else {
+        cluster.entries[idx].removing = !cluster.entries[idx].removing;
       }
     } else {
-      if (state.gpuEntries[idx]) {
-        if (state.gpuEntries[idx].isNew) {
-          state.gpuEntries.splice(idx, 1);
-        } else {
-          state.gpuEntries[idx].removing = !state.gpuEntries[idx].removing;
-        }
+      if (!state.gpuEntries[idx]) return;
+      if (state.gpuEntries[idx].isNew) {
+        state.gpuEntries.splice(idx, 1);
+      } else {
+        state.gpuEntries[idx].removing = !state.gpuEntries[idx].removing;
       }
     }
     renderAll();
   }
 
-  /* ─── Restore Entry ───────────────────────────────────────────────── */
   function restoreRow(type, clusterId, idx) {
     if (type === 'CPU') {
       const cluster = state.cpuClusters.find(c => c.id === clusterId);
       const origCluster = state.originalCpu.find(c => c.id === clusterId);
-      if (cluster && cluster.entries[idx]) {
-        if (cluster.entries[idx].isNew) {
-          cluster.entries.splice(idx, 1);
-        } else if (origCluster && origCluster.entries[idx]) {
-          cluster.entries[idx].freq = origCluster.entries[idx].freq;
-          cluster.entries[idx].uvolt = origCluster.entries[idx].uvolt;
-          cluster.entries[idx].modified = false;
-          cluster.entries[idx].removing = false;
-        }
+      if (!cluster || !cluster.entries[idx]) return;
+      if (cluster.entries[idx].isNew) {
+        cluster.entries.splice(idx, 1);
+      } else if (origCluster && origCluster.entries[idx]) {
+        cluster.entries[idx].freq = origCluster.entries[idx].freq;
+        cluster.entries[idx].volt = origCluster.entries[idx].volt;
+        cluster.entries[idx].modified = false;
+        cluster.entries[idx].removing = false;
       }
     } else {
-      if (state.gpuEntries[idx]) {
-        if (state.gpuEntries[idx].isNew) {
-          state.gpuEntries.splice(idx, 1);
-        } else if (state.originalGpu[idx]) {
-          state.gpuEntries[idx].freq = state.originalGpu[idx].freq;
-          state.gpuEntries[idx].uvolt = state.originalGpu[idx].uvolt;
-          state.gpuEntries[idx].modified = false;
-          state.gpuEntries[idx].removing = false;
-        }
+      if (!state.gpuEntries[idx]) return;
+      if (state.gpuEntries[idx].isNew) {
+        state.gpuEntries.splice(idx, 1);
+      } else if (state.originalGpu[idx]) {
+        state.gpuEntries[idx].freq = state.originalGpu[idx].freq;
+        state.gpuEntries[idx].volt = state.originalGpu[idx].volt;
+        state.gpuEntries[idx].modified = false;
+        state.gpuEntries[idx].removing = false;
       }
     }
     renderAll();
@@ -636,94 +667,68 @@
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
     showToast('Applying changes...', 'info');
-    let errorCount = 0;
 
-    // Apply global settings
-    const settingsFields = {
-      cpu_oc_percent: document.getElementById('cpu_oc_percent'),
-      cpu_uvolt_offset: document.getElementById('cpu_uvolt_offset'),
-      gpu_oc_percent: document.getElementById('gpu_oc_percent'),
-      gpu_uvolt_offset: document.getElementById('gpu_uvolt_offset'),
-    };
-
-    for (const [key, el] of Object.entries(settingsFields)) {
-      if (!el) continue;
-      const val = parseInt(el.value, 10) || 0;
-      state.settings[key] = val;
-      const res = await exec(`echo ${val} > ${KS_PARAMS}${key} 2>/dev/null`);
-      if (res.stderr) errorCount++;
-    }
-
-    // Process per-entry changes
-    const allEntries = [];
-
-    // CPU changes
+    // CPU: Apply frequency limits
     for (const cluster of state.cpuClusters) {
-      for (const entry of cluster.entries) {
-        if (entry.removing && !entry.isNew) {
-          await exec(`echo "CPU:${entry.clusterId}:${entry.origFreq}" > ${KS_PARAMS}opp_remove 2>/dev/null`);
-        } else if (entry.isNew) {
-          await exec(`echo "CPU:${entry.clusterId}:${entry.freq}:${entry.uvolt}" > ${KS_PARAMS}opp_add 2>/dev/null`);
-          allEntries.push(`CPU:${entry.clusterId}:${entry.freq}:${entry.uvolt}`);
-        } else if (entry.modified) {
-          await exec(`echo "CPU:${entry.clusterId}:${entry.origFreq}:${entry.freq}:${entry.uvolt}" > ${KS_PARAMS}opp_modify 2>/dev/null`);
+      const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
+      const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
+
+      if (maxSel) {
+        const maxFreq = parseInt(maxSel.value, 10);
+        if (!isNaN(maxFreq) && maxFreq > 0) {
+          await exec(`echo ${maxFreq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`);
+          cluster.curMax = maxFreq;
+        }
+      }
+      if (minSel) {
+        const minFreq = parseInt(minSel.value, 10);
+        if (!isNaN(minFreq) && minFreq > 0) {
+          await exec(`echo ${minFreq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`);
+          cluster.curMin = minFreq;
         }
       }
     }
 
-    // GPU changes
+    // GPU: Apply modified freq/volt via gpufreqv2
     for (const entry of state.gpuEntries) {
-      if (entry.removing && !entry.isNew) {
-        await exec(`echo "GPU:${entry.clusterId}:${entry.origFreq}" > ${KS_PARAMS}opp_remove 2>/dev/null`);
-      } else if (entry.isNew) {
-        await exec(`echo "GPU:${entry.clusterId}:${entry.freq}:${entry.uvolt}" > ${KS_PARAMS}opp_add 2>/dev/null`);
-        allEntries.push(`GPU:${entry.clusterId}:${entry.freq}:${entry.uvolt}`);
-      } else if (entry.modified) {
-        await exec(`echo "GPU:${entry.clusterId}:${entry.origFreq}:${entry.freq}:${entry.uvolt}" > ${KS_PARAMS}opp_modify 2>/dev/null`);
+      if ((entry.modified || entry.isNew) && !entry.removing) {
+        const gpuVoltStep = Math.round(entry.volt / 10);
+        await exec(`echo "${entry.freq} ${gpuVoltStep}" > /proc/gpufreqv2/fix_custom_freq_volt`);
       }
     }
 
-    // Trigger full rescan
-    await exec(`echo 1 > ${KS_PARAMS}apply 2>/dev/null`);
-
-    // Save config for persistence across reboots
-    await saveConfig(allEntries);
-
-    if (errorCount > 0) {
-      showToast(`Applied with ${errorCount} warning(s)`, 'error');
-    } else {
-      showToast('All changes applied successfully!', 'success');
-    }
-
-    // Reload data to reflect actual state
-    await new Promise(r => setTimeout(r, 500));
-    await loadData();
+    await saveConfig();
+    showToast('All changes applied!', 'success');
   }
 
-  /* ─── Save Config for Boot Persistence ────────────────────────────── */
-  async function saveConfig(customOpps) {
+  /* ─── Save Config ─────────────────────────────────────────────────── */
+  async function saveConfig() {
+    const cpuLimits = {};
+    for (const cluster of state.cpuClusters) {
+      const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
+      const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
+      cpuLimits[cluster.id] = {
+        max: maxSel ? parseInt(maxSel.value, 10) : cluster.curMax,
+        min: minSel ? parseInt(minSel.value, 10) : cluster.curMin,
+      };
+    }
+
+    const gpuCustom = state.gpuEntries
+      .filter(e => (e.modified || e.isNew) && !e.removing)
+      .map(e => ({ freq: e.freq, volt: e.volt }));
+
     const config = {
-      cpu_oc_percent: state.settings.cpu_oc_percent,
-      cpu_uvolt_offset: state.settings.cpu_uvolt_offset,
-      gpu_oc_percent: state.settings.gpu_oc_percent,
-      gpu_uvolt_offset: state.settings.gpu_uvolt_offset,
-      custom_opps: customOpps.join('|'),
+      version: 3,
+      cpu_limits: cpuLimits,
+      gpu_custom: gpuCustom,
       saved_at: new Date().toISOString(),
     };
 
     const json = JSON.stringify(config);
-    await exec(`mkdir -p ${CONFIG_DIR} && echo '${json}' > ${CONFIG_FILE}`);
+    await exec(`mkdir -p ${CONFIG_DIR} && printf '%s' '${json.replace(/'/g, "'\\''")}' > ${CONFIG_FILE}`);
   }
 
-  /* ─── Settings Change Handler ─────────────────────────────────────── */
-  function onSettingChange(field) {
-    const el = document.getElementById(field);
-    if (el) {
-      state.settings[field] = parseInt(el.value, 10) || 0;
-    }
-  }
-
-  /* ─── Public API (exposed to HTML onclick handlers) ───────────────── */
+  /* ─── Public API ──────────────────────────────────────────────────── */
   window.OC = {
     onCellChange,
     toggleAddForm,
@@ -732,7 +737,6 @@
     restoreRow,
     applyAll,
     scanAndLoad,
-    onSettingChange,
     loadData,
   };
 

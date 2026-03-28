@@ -1,0 +1,8 @@
+# Build output
+*.ko
+*.zip
+
+# Editor
+*.swp
+*~
+.vscode/

@@ -1,60 +1,63 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v2.0
+# Headwolf F8 KPM OC Manager - Service Script v3.0
+# Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
 CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
+CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
+GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 
 # Load the compiled KPM module into the kernel
 insmod ${MODDIR}/kpm_oc.ko 2>/dev/null
 
-# Wait for module to initialize
+# Wait for module to initialize and auto-scan
 sleep 2
 
 # Ensure sysfs parameters are accessible
 chmod 644 /sys/module/kpm_oc/parameters/* 2>/dev/null
 
-# Trigger initial OPP table scan (read-only export)
-echo 1 > /sys/module/kpm_oc/parameters/apply 2>/dev/null
-
-# Restore saved settings if config exists
-if [ -f "${CONFIG_FILE}" ]; then
-    # Parse and apply saved CPU settings
-    CPU_OC=$(cat "${CONFIG_FILE}" 2>/dev/null | busybox sed -n 's/.*"cpu_oc_percent":\([0-9-]*\).*/\1/p')
-    CPU_UV=$(cat "${CONFIG_FILE}" 2>/dev/null | busybox sed -n 's/.*"cpu_uvolt_offset":\([0-9-]*\).*/\1/p')
-    GPU_OC=$(cat "${CONFIG_FILE}" 2>/dev/null | busybox sed -n 's/.*"gpu_oc_percent":\([0-9-]*\).*/\1/p')
-    GPU_UV=$(cat "${CONFIG_FILE}" 2>/dev/null | busybox sed -n 's/.*"gpu_uvolt_offset":\([0-9-]*\).*/\1/p')
-
-    [ -n "${CPU_OC}" ] && echo "${CPU_OC}" > /sys/module/kpm_oc/parameters/cpu_oc_percent
-    [ -n "${CPU_UV}" ] && echo "${CPU_UV}" > /sys/module/kpm_oc/parameters/cpu_uvolt_offset
-    [ -n "${GPU_OC}" ] && echo "${GPU_OC}" > /sys/module/kpm_oc/parameters/gpu_oc_percent
-    [ -n "${GPU_UV}" ] && echo "${GPU_UV}" > /sys/module/kpm_oc/parameters/gpu_uvolt_offset
-
-    # Apply custom OPP entries
-    CUSTOM_OPPS=$(cat "${CONFIG_FILE}" 2>/dev/null | busybox sed -n 's/.*"custom_opps":"\([^"]*\)".*/\1/p')
-    if [ -n "${CUSTOM_OPPS}" ]; then
-        echo "${CUSTOM_OPPS}" | tr '|' '\n' | while read entry; do
-            [ -n "${entry}" ] && echo "${entry}" > /sys/module/kpm_oc/parameters/opp_add 2>/dev/null
-        done
-    fi
-
-    # Re-apply to rescan with new settings
+# Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:volt_uv|...)
+CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
+if [ -z "${CPU_RAW}" ] || [ "${CPU_RAW}" = "READY" ]; then
+    # Trigger rescan
     echo 1 > /sys/module/kpm_oc/parameters/apply 2>/dev/null
-
-    log -t "KPM_OC" "Restored saved OC configuration"
+    sleep 1
+    CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
 fi
+echo "${CPU_RAW}" > "${CPU_OPP_FILE}" 2>/dev/null
+log -t "KPM_OC" "CPU OPP table exported: $(echo "${CPU_RAW}" | wc -c) bytes"
 
-# Collect GPU devfreq path for WebUI sysfs fallback
+# Export GPU OPP table from /proc/gpufreqv2 (format: GPU:0:freq_khz:volt_uv|...)
+GPU_DATA=""
+if [ -f /proc/gpufreqv2/gpu_working_opp_table ]; then
+    while IFS= read -r line; do
+        freq=$(echo "${line}" | sed -n 's/.*freq: *\([0-9]*\).*/\1/p')
+        volt=$(echo "${line}" | sed -n 's/.*volt: *\([0-9]*\).*/\1/p')
+        if [ -n "${freq}" ] && [ -n "${volt}" ]; then
+            # freq is in KHz, volt is in step×100 uV (gpufreqv2: e.g. 81875 = 818.75 mV)
+            # Convert volt from gpufreqv2 format (x100 uV) to uV: multiply by 10
+            volt_uv=$((volt * 10))
+            if [ -n "${GPU_DATA}" ]; then
+                GPU_DATA="${GPU_DATA}|GPU:0:${freq}:${volt_uv}"
+            else
+                GPU_DATA="GPU:0:${freq}:${volt_uv}"
+            fi
+        fi
+    done < /proc/gpufreqv2/gpu_working_opp_table
+fi
+echo "${GPU_DATA}" > "${GPU_OPP_FILE}" 2>/dev/null
+log -t "KPM_OC" "GPU OPP table exported: $(echo "${GPU_DATA}" | wc -c) bytes"
+
+# Store GPU devfreq path for WebUI
 GPU_DEVFREQ=""
-for path in /sys/class/devfreq/*gpu* /sys/class/devfreq/*mali* /sys/class/devfreq/*sgpu*; do
-    if [ -d "${path}" ] && [ -f "${path}/available_frequencies" ]; then
+for path in /sys/class/devfreq/*mali*; do
+    if [ -d "${path}" ]; then
         GPU_DEVFREQ="${path}"
         break
     fi
 done
-
-# Export GPU devfreq path for WebUI
 if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi
 
-log -t "KPM_OC" "Service script completed. Module loaded."
+log -t "KPM_OC" "Service script v3.0 completed. Module loaded."

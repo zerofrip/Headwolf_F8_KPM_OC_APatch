@@ -15,7 +15,7 @@
   <header class="header">
     <div class="header-icon">⚡</div>
     <h1>OC Manager</h1>
-    <p class="subtitle">Headwolf F8 · KPM v2.0</p>
+    <p class="subtitle">Headwolf F8 · Dimensity 8300 · v3.0</p>
     <div id="module-status" class="status-badge offline">
       <span class="status-dot"></span> Checking...
     </div>
@@ -34,44 +34,8 @@
   <!-- ═══ CPU Tab ═══ -->
   <section class="tab-content active" data-tab="cpu">
 
-    <!-- Global CPU Settings -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">
-          <span class="icon">⚙</span>
-          CPU Global Settings
-        </div>
-        <span class="card-badge cpu">Config</span>
-      </div>
-
-      <div class="config-row">
-        <div>
-          <div class="config-label">Overclock</div>
-          <div class="config-desc">Add OPP point above max frequency</div>
-        </div>
-        <div style="display:flex;align-items:center">
-          <input type="number" class="config-input" id="cpu_oc_percent" value="0"
-                 onchange="window.OC.onSettingChange('cpu_oc_percent')">
-          <span class="config-unit">%</span>
-        </div>
-      </div>
-
-      <div class="config-row">
-        <div>
-          <div class="config-label">Voltage Offset</div>
-          <div class="config-desc">Global shift for all CPU OPPs</div>
-        </div>
-        <div style="display:flex;align-items:center">
-          <input type="number" class="config-input" id="cpu_uvolt_offset" value="0"
-                 onchange="window.OC.onSettingChange('cpu_uvolt_offset')">
-          <span class="config-unit">µV</span>
-        </div>
-      </div>
-    </div>
-
     <!-- CPU Cluster Tables (dynamically populated) -->
     <div id="cpu-clusters">
-      <!-- Loading skeleton -->
       <div class="card">
         <div class="card-header">
           <div class="skeleton" style="width:120px;height:18px"></div>
@@ -84,10 +48,10 @@
     <!-- CPU Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-cpu-scan" style="flex:1">
-        🔄 Scan & Load
+        🔄 Reload
       </button>
       <button class="btn btn-primary btn-full" onclick="window.OC.applyAll()" id="btn-cpu-apply" style="flex:2">
-        🚀 Apply All Changes
+        🚀 Apply Changes
       </button>
     </div>
 
@@ -96,44 +60,8 @@
   <!-- ═══ GPU Tab ═══ -->
   <section class="tab-content" data-tab="gpu">
 
-    <!-- Global GPU Settings -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">
-          <span class="icon">⚙</span>
-          GPU Global Settings
-        </div>
-        <span class="card-badge gpu">Config</span>
-      </div>
-
-      <div class="config-row">
-        <div>
-          <div class="config-label">Overclock</div>
-          <div class="config-desc">Add OPP point above max GPU frequency</div>
-        </div>
-        <div style="display:flex;align-items:center">
-          <input type="number" class="config-input" id="gpu_oc_percent" value="0"
-                 onchange="window.OC.onSettingChange('gpu_oc_percent')">
-          <span class="config-unit">%</span>
-        </div>
-      </div>
-
-      <div class="config-row">
-        <div>
-          <div class="config-label">Voltage Offset</div>
-          <div class="config-desc">Global shift for all GPU OPPs</div>
-        </div>
-        <div style="display:flex;align-items:center">
-          <input type="number" class="config-input" id="gpu_uvolt_offset" value="0"
-                 onchange="window.OC.onSettingChange('gpu_uvolt_offset')">
-          <span class="config-unit">µV</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- GPU Device Tables (dynamically populated) -->
+    <!-- GPU OPP Table (dynamically populated) -->
     <div id="gpu-devices">
-      <!-- Loading skeleton -->
       <div class="card">
         <div class="card-header">
           <div class="skeleton" style="width:120px;height:18px"></div>
@@ -146,10 +74,10 @@
     <!-- GPU Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-gpu-scan" style="flex:1">
-        🔄 Scan & Load
+        🔄 Reload
       </button>
       <button class="btn btn-primary gpu-accent btn-full" onclick="window.OC.applyAll()" id="btn-gpu-apply" style="flex:2">
-        🚀 Apply All Changes
+        🚀 Apply Changes
       </button>
     </div>
 
