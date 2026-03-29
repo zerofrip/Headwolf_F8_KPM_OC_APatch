@@ -1,6 +1,6 @@
 id=f8_kpm_oc_manager
 name=Headwolf F8 OC Manager
-version=v3.2
+version=v3.5
 versionCode=4
 author=zerofrip
 description=CPU/GPU OC Manager for Dimensity 8300. CSRAM LUT reader + gpufreqv2 interface. WebUI with editable freq/volt tables.
