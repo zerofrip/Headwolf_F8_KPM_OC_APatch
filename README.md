@@ -1,67 +1,126 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v3.2) providing a WebUI for CPU/GPU overclock management on the Headwolf F8 tablet (Dimensity 8300).
+APatch/KernelSU module (service.sh v3.5) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
-- **CPU OPP Table** — Displays per-cluster frequency/voltage data read from CSRAM via the kernel module (`kpm_oc.ko`)
-- **GPU OPP Table** — Displays GPU OPP entries (freq + volt + VSRAM) from `/proc/gpufreqv2`
-- **Frequency Limits** — Per-cluster min/max frequency control via `scaling_max_freq` / `scaling_min_freq`
-- **GPU Voltage Control** — Apply custom freq/volt pairs via `fix_custom_freq_volt`
-- **Table Editing** — Add, modify, or remove OPP entries with instant visual feedback
-- **Configuration Persistence** — Settings saved as JSON to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json`
+- **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`
+- **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
+- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
+- **GPU Module Reload** *(opt-in)* — Replaces `mtk_gpufreq_mt6897.ko` with a pre-patched binary that encodes the new top OPP, bypassing GPUEB re-initialization
+- **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
+- **WebUI** — Browser-based interface (freq/volt tables, min/max sliders, apply buttons)
+- **Configuration Persistence** — Settings saved to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json`
 
 ## Structure
 
 ```
-├── module.prop          # APatch module metadata (v3.2)
-├── kpm_oc.ko            # Compiled kernel module (CSRAM LUT reader)
-├── service.sh           # Boot-time service: loads kpm_oc.ko, exports OPP data
+├── module.prop                     # APatch module metadata
+├── kpm_oc.ko                       # Compiled kernel module (v6.4)
+├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
+├── service.sh                      # Boot-time service (v3.5)
+├── tools/
+│   ├── patch_mtk_gpufreq_1450.py   # Binary patcher: set custom top GPU OPP in .ko
+│   └── auto_tune_top_opp.sh        # Helper: auto-selects top OPP for reload
 └── webroot/
-    ├── index.html       # WebUI shell (CPU/GPU tabs)
-    ├── app.js           # Application logic (KernelSU ksu.exec API)
-    └── style.css        # Dark glassmorphism design system
+    ├── index.html                   # WebUI shell (CPU/GPU tabs)
+    ├── app.js                       # Application logic (APatch ksu.exec API)
+    └── style.css                    # Dark glassmorphism design system
 ```
 
-## Data Flow
+## Boot Flow (`service.sh`)
 
-### Boot (`service.sh`)
-1. Loads `kpm_oc.ko` via `insmod` (auto-scans CSRAM)
-2. Reads CPU OPP from `/sys/module/kpm_oc/parameters/opp_table` → saves to `cpu_opp_table`
-3. Reads raw debug data from `/sys/module/kpm_oc/parameters/raw` → saves to `cpu_raw_dump`
-4. Parses GPU OPP from `/proc/gpufreqv2/gpu_working_opp_table` → saves to `gpu_opp_table`
-5. Detects GPU devfreq path (`/sys/class/devfreq/*mali*`)
+1. **(opt-in)** Reload `mtk_gpufreq_mt6897.ko` with the patched binary (`enable_gpufreq_reload` flag file)
+   - Unloads `mtk_gpu_hal` → `mtk_gpu_power_throttling` → `mtk_gpufreq_wrapper` → `mtk_gpufreq_mt6897`
+   - Loads patched core, then vendor companions
+   - Verifies `gpu_working_opp_table[0] ≥ 1450000 KHz`; rolls back if not
+2. Load `kpm_oc.ko` via `insmod` (CPU CSRAM scan + GPU OC applied automatically on init)
+3. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+4. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+5. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
 
-### WebUI (`app.js`)
-Uses the KernelSU/APatch `ksu.exec()` JavaScript bridge (callback-name API) to:
-1. Read CPU OPP from sysfs parameter or cached file
-2. Read GPU OPP from `/proc/gpufreqv2` or cached file
-3. Read available frequencies and current limits per policy
-4. Apply frequency limits and GPU custom voltage via shell commands
+## CPU Overclocking
 
-## Data Sources
+The `kpm_oc.ko` module exposes per-cluster OC params under `/sys/module/kpm_oc/parameters/`:
 
-| Data | Source | Format |
-|------|--------|--------|
-| CPU freq + volt (CSRAM LUT) | `kpm_oc.ko` sysfs → `opp_table` | `CPU:policy:freq_khz:volt_uv` |
-| CPU raw debug | `kpm_oc.ko` sysfs → `raw` | Hex dump: `lut_val/em_val` per entry |
-| CPU available frequencies | `/sys/devices/system/cpu/cpufreq/policy{0,4,7}/` | Space-separated KHz |
-| GPU freq + volt + VSRAM | `/proc/gpufreqv2/gpu_working_opp_table` | `[idx] freq: N, volt: N, vsram: N` |
+| Parameter | Description |
+|-----------|-------------|
+| `cpu_oc_l_freq` | L cluster (policy0) target KHz (`0` = skip) |
+| `cpu_oc_l_volt` | L cluster target µV (`0` = keep original) |
+| `cpu_oc_b_freq` | B cluster (policy4) target KHz |
+| `cpu_oc_b_volt` | B cluster target µV |
+| `cpu_oc_p_freq` | P cluster (policy7) target KHz |
+| `cpu_oc_p_volt` | P cluster target µV |
+| `cpu_oc_apply` | Write `1` to apply |
+| `cpu_oc_result` | Result string (read-only) |
+
+Applying writes to CSRAM LUT[0] and updates `cpuinfo_max_freq` / `policy->max` so the scheduler and governor can target the new ceiling.
+
+```bash
+echo 3600000 > /sys/module/kpm_oc/parameters/cpu_oc_p_freq
+echo 1100000 > /sys/module/kpm_oc/parameters/cpu_oc_p_volt
+echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply
+# cpu_oc_result: P:3350000->3600000KHz@1100000uV
+```
+
+## GPU Overclocking
+
+### Method A — Runtime memory patch (default, no reboot)
+
+`kpm_oc.ko` patches `g_gpu_default_opp_table[0]` and the working table at runtime.
+Default target on boot: **1450 MHz @ 87500 µV**.
+
+```bash
+echo 1467000 > /sys/module/kpm_oc/parameters/gpu_target_freq
+echo  91875 > /sys/module/kpm_oc/parameters/gpu_target_volt
+echo  91875 > /sys/module/kpm_oc/parameters/gpu_target_vsram
+echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply
+cat /sys/module/kpm_oc/parameters/gpu_oc_result
+# OK:patched=3,freq=1450000->1467000,...
+```
+
+### Method B — Binary-patched `.ko` reload (opt-in, persistent across GPUEB re-init)
+
+1. Generate a patched GPU driver with `tools/patch_mtk_gpufreq_1450.py`:
+   ```bash
+   python3 tools/patch_mtk_gpufreq_1450.py \
+       /vendor/lib/modules/mtk_gpufreq_mt6897.ko \
+       mtk_gpufreq_mt6897_1450.ko \
+       --new-top-freq 1450000
+   ```
+2. Place the output as `mtk_gpufreq_mt6897_1450.ko` in the module root
+3. Create the flag file: `touch /data/adb/modules/f8_kpm_oc_manager/enable_gpufreq_reload`
+4. Reboot — `service.sh` will replace the vendor driver on next boot
+
+The generated file `mtk_gpufreq_mt6897_1450.ko` (1450 MHz) is included in this repository.
 
 ## Control Interfaces
 
 | Action | Interface |
 |--------|-----------|
-| CPU max freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{N}/scaling_max_freq` |
-| CPU min freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{N}/scaling_min_freq` |
+| CPU CSRAM rescan | `echo 1 > /sys/module/kpm_oc/parameters/apply` |
+| CPU OC apply | `echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply` |
+| GPU OC re-apply | `echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply` |
+| CPU max freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_max_freq` |
+| CPU min freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_min_freq` |
 | GPU custom volt | `echo "<freq> <volt_step>" > /proc/gpufreqv2/fix_custom_freq_volt` |
-| CSRAM rescan | `echo 1 > /sys/module/kpm_oc/parameters/apply` |
+| GPU fixed OPP index | `echo <idx> > /proc/gpufreqv2/fix_target_opp_index` |
+
+## Data Sources
+
+| Data | Source |
+|------|--------|
+| CPU freq + volt | `kpm_oc.ko` → `opp_table` sysfs |
+| CPU available freqs | `/sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_available_frequencies` |
+| GPU freq + volt + vsram | `/proc/gpufreqv2/gpu_working_opp_table` |
+| GPU status | `/proc/gpufreqv2/gpufreq_status` |
 
 ## Installation
 
 1. Build `kpm_oc.ko` from [Headwolf_F8_KPM_OC_Kernel](https://github.com/zerofrip/Headwolf_F8_KPM_OC_Kernel)
-2. Place `kpm_oc.ko` in this module's root directory
-3. ZIP the module directory and flash via APatch / KernelSU manager
+2. Place `kpm_oc.ko` in the module root directory
+3. (Optional) Generate and place `mtk_gpufreq_mt6897_1450.ko` with `tools/patch_mtk_gpufreq_1450.py`
+4. ZIP the module directory and flash via APatch / KernelSU manager
 
 ## Requirements
 
