@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v3.5) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (service.sh v4.0) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -9,22 +9,22 @@ APatch/KernelSU module (service.sh v3.5) providing CPU and GPU overclocking for 
 - **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
 - **GPU Module Reload** *(opt-in)* — Replaces `mtk_gpufreq_mt6897.ko` with a pre-patched binary that encodes the new top OPP, bypassing GPUEB re-initialization
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
-- **WebUI** — Browser-based interface (freq/volt tables, min/max sliders, apply buttons)
-- **Configuration Persistence** — Settings saved to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json`
+- **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt, set scaling limits, one-tap apply
+- **Configuration Persistence** — OC params and scaling limits saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v6.4)
+├── kpm_oc.ko                       # Compiled kernel module (v6.5)
 ├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
-├── service.sh                      # Boot-time service (v3.5)
+├── service.sh                      # Boot-time service (v4.0)
 ├── tools/
 │   ├── patch_mtk_gpufreq_1450.py   # Binary patcher: set custom top GPU OPP in .ko
 │   └── auto_tune_top_opp.sh        # Helper: auto-selects top OPP for reload
 └── webroot/
-    ├── index.html                   # WebUI shell (CPU/GPU tabs)
-    ├── app.js                       # Application logic (APatch ksu.exec API)
+    ├── index.html                  # WebUI shell (CPU/GPU tabs)
+    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs)
     └── style.css                    # Dark glassmorphism design system
 ```
 
@@ -34,10 +34,35 @@ APatch/KernelSU module (service.sh v3.5) providing CPU and GPU overclocking for 
    - Unloads `mtk_gpu_hal` → `mtk_gpu_power_throttling` → `mtk_gpufreq_wrapper` → `mtk_gpufreq_mt6897`
    - Loads patched core, then vendor companions
    - Verifies `gpu_working_opp_table[0] ≥ 1450000 KHz`; rolls back if not
-2. Load `kpm_oc.ko` via `insmod` (CPU CSRAM scan + GPU OC applied automatically on init)
-3. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
-4. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
-5. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+2. Parse `oc_config.json` for saved OC params (CPU + GPU) and build `insmod` parameter string
+3. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3600000 gpu_target_freq=1500000 ...`)
+   - CPU CSRAM auto-scan runs on init
+   - GPU OC auto-applies on init
+   - CPU OC auto-applies if any `cpu_oc_*_freq` param is nonzero
+4. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
+5. Log CPU/GPU OC results
+6. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+7. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+8. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+
+### Config Persistence
+
+The WebUI saves OC settings to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json` as a flat JSON:
+
+```json
+{
+  "version": 4,
+  "cpu_oc_l_freq": 2400000, "cpu_oc_l_volt": 875000,
+  "cpu_oc_b_freq": 0,       "cpu_oc_b_volt": 0,
+  "cpu_oc_p_freq": 3600000, "cpu_oc_p_volt": 1100000,
+  "gpu_oc_freq": 1500000,   "gpu_oc_volt": 91875, "gpu_oc_vsram": 91875,
+  "cpu_max_0": 2400000, "cpu_min_0": 480000,
+  "cpu_max_4": 3300000, "cpu_min_4": 400000,
+  "cpu_max_7": 3600000, "cpu_min_7": 400000
+}
+```
+
+`service.sh` parses this with lightweight `grep` (no `jq` needed) and passes values as `insmod` params.
 
 ## CPU Overclocking
 
