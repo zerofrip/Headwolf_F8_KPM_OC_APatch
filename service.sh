@@ -1,6 +1,7 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v3.5
+# Headwolf F8 KPM OC Manager - Service Script v4.0
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
+# Restores OC config (CPU/GPU) and scaling limits from saved config
 # Optional: safe-ish boot-time reload of GPUFreq modules with patched core ko
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
@@ -104,8 +105,30 @@ reload_gpufreq_modules() {
 # Optional early GPUFreq reload attempt (does nothing unless flag file exists)
 reload_gpufreq_modules
 
+# ─── Parse OC config for insmod params ───────────────────────────────────
+# Flat JSON keys: cpu_oc_{l,b,p}_{freq,volt}, gpu_oc_{freq,volt,vsram}
+json_int() {
+    grep -o "\"$1\":[0-9]*" "${CONFIG_FILE}" 2>/dev/null | head -1 | grep -o '[0-9]*$'
+}
+
+INSMOD_PARAMS=""
+if [ -f "${CONFIG_FILE}" ]; then
+    for key in cpu_oc_l_freq cpu_oc_l_volt cpu_oc_b_freq cpu_oc_b_volt \
+               cpu_oc_p_freq cpu_oc_p_volt; do
+        v=$(json_int "${key}")
+        [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} ${key}=${v}"
+    done
+
+    # GPU OC: config keys → module param names
+    v=$(json_int gpu_oc_freq);  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_freq=$v"
+    v=$(json_int gpu_oc_volt);  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_volt=$v"
+    v=$(json_int gpu_oc_vsram); [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_vsram=$v"
+
+    logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
+fi
+
 # Load the compiled KPM module into the kernel
-insmod ${MODDIR}/kpm_oc.ko 2>/dev/null
+insmod ${MODDIR}/kpm_oc.ko${INSMOD_PARAMS} 2>/dev/null
 
 # Wait for module to initialize and auto-scan
 sleep 2
@@ -114,11 +137,29 @@ sleep 2
 chmod 644 /sys/module/kpm_oc/parameters/opp_table 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/raw 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null
+chmod 644 /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null
+
+# ─── Restore CPU scaling limits from config ──────────────────────────────
+if [ -f "${CONFIG_FILE}" ]; then
+    for policy in 0 4 7; do
+        max_val=$(json_int "cpu_max_${policy}")
+        min_val=$(json_int "cpu_min_${policy}")
+        if [ -n "$min_val" ] && [ "$min_val" -gt 0 ] 2>/dev/null; then
+            echo "$min_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_min_freq 2>/dev/null
+        fi
+        if [ -n "$max_val" ] && [ "$max_val" -gt 0 ] 2>/dev/null; then
+            echo "$max_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null
+        fi
+    done
+    logi "CPU scaling limits restored from config"
+fi
 
 # GPU OC is applied automatically on module load (kpm_oc_init calls set_gpu_oc()).
-# Just log the result here.
+# CPU OC is applied if config params were passed via insmod.
 GPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null)
 logi "GPU OC result (auto on load): ${GPU_OC_RES}"
+CPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null)
+[ -n "${CPU_OC_RES}" ] && logi "CPU OC result (auto on load): ${CPU_OC_RES}"
 
 # Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:raw32|...)
 CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
@@ -166,4 +207,4 @@ if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi
 
-logi "Service script v3.5 completed. Module loaded."
+logi "Service script v4.0 completed. Module loaded."

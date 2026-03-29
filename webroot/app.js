@@ -678,62 +678,128 @@
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
     showToast('Applying changes...', 'info');
+    let anyOcApplied = false;
 
-    // CPU: Apply frequency limits
+    /* --- CPU OC: detect entries above stock max, apply via kpm_oc --- */
+    const clusterParamMap = { 0: 'l', 4: 'b', 7: 'p' };
+    let cpuOcNeeded = false;
+
     for (const cluster of state.cpuClusters) {
+      const key = clusterParamMap[cluster.id];
+      if (!key) continue;
+
+      const active = cluster.entries.filter(e => !e.removing);
+      const maxEntry = active.length > 0
+        ? active.reduce((m, e) => e.freq > m.freq ? e : m)
+        : null;
+
+      const origCluster = state.originalCpu.find(c => c.id === cluster.id);
+      const origEntries = origCluster ? origCluster.entries : [];
+      const origMax = origEntries.length > 0
+        ? Math.max(...origEntries.map(e => e.freq))
+        : 0;
+
+      if (maxEntry && maxEntry.freq > origMax && (maxEntry.isNew || maxEntry.modified)) {
+        await exec(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`);
+        await exec(`echo ${maxEntry.volt} > ${KS_PARAMS}cpu_oc_${key}_volt`);
+        cpuOcNeeded = true;
+      }
+
+      /* Scaling limits */
       const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
       const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
-
       if (maxSel) {
-        const maxFreq = parseInt(maxSel.value, 10);
-        if (!isNaN(maxFreq) && maxFreq > 0) {
-          await exec(`echo ${maxFreq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`);
-          cluster.curMax = maxFreq;
+        const v = parseInt(maxSel.value, 10);
+        if (!isNaN(v) && v > 0) {
+          await exec(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`);
+          cluster.curMax = v;
         }
       }
       if (minSel) {
-        const minFreq = parseInt(minSel.value, 10);
-        if (!isNaN(minFreq) && minFreq > 0) {
-          await exec(`echo ${minFreq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`);
-          cluster.curMin = minFreq;
+        const v = parseInt(minSel.value, 10);
+        if (!isNaN(v) && v > 0) {
+          await exec(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`);
+          cluster.curMin = v;
         }
       }
     }
 
-    // GPU: Apply modified freq/volt via gpufreqv2
+    if (cpuOcNeeded) {
+      await exec(`echo 1 > ${KS_PARAMS}cpu_oc_apply`);
+      anyOcApplied = true;
+    }
+
+    /* --- GPU OC: detect top entry above stock max, apply via kpm_oc --- */
+    const activeGpu = state.gpuEntries.filter(e => !e.removing);
+    const gpuMax = activeGpu.length > 0
+      ? activeGpu.reduce((m, e) => e.freq > m.freq ? e : m)
+      : null;
+    const origGpuMax = state.originalGpu.length > 0
+      ? Math.max(...state.originalGpu.map(e => e.freq))
+      : 0;
+
+    if (gpuMax && gpuMax.freq > origGpuMax && (gpuMax.isNew || gpuMax.modified)) {
+      /* gpu_target_* expects OPP-table units (gpufreqv2 value, not µV) */
+      const voltStep = Math.round(gpuMax.volt / 10);
+      const vsramStep = gpuMax.vsram > 0 ? Math.round(gpuMax.vsram / 10) : voltStep;
+      await exec(`echo ${gpuMax.freq} > ${KS_PARAMS}gpu_target_freq`);
+      await exec(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`);
+      await exec(`echo ${vsramStep} > ${KS_PARAMS}gpu_target_vsram`);
+      await exec(`echo 1 > ${KS_PARAMS}gpu_oc_apply`);
+      anyOcApplied = true;
+    }
+
+    /* GPU: voltage-only tweaks on existing frequencies (safe for fix_custom_freq_volt) */
     for (const entry of state.gpuEntries) {
-      if ((entry.modified || entry.isNew) && !entry.removing) {
+      if (entry.modified && !entry.isNew && !entry.removing &&
+          entry.freq === entry.origFreq && entry.volt !== entry.origVolt) {
         const gpuVoltStep = Math.round(entry.volt / 10);
         await exec(`echo "${entry.freq} ${gpuVoltStep}" > /proc/gpufreqv2/fix_custom_freq_volt`);
       }
     }
 
     await saveConfig();
-    showToast('All changes applied!', 'success');
+    showToast('Changes applied & saved!', 'success');
   }
 
   /* ─── Save Config ─────────────────────────────────────────────────── */
   async function saveConfig() {
-    const cpuLimits = {};
+    /* Read current kpm_oc OC params from sysfs (post-apply state) */
+    const ocRaw = await exec(
+      `echo "$(cat ${KS_PARAMS}cpu_oc_l_freq 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}cpu_oc_l_volt 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}cpu_oc_b_freq 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}cpu_oc_b_volt 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}cpu_oc_p_freq 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}cpu_oc_p_volt 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}gpu_target_freq 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}gpu_target_volt 2>/dev/null || echo 0)` +
+      ` $(cat ${KS_PARAMS}gpu_target_vsram 2>/dev/null || echo 0)"`
+    );
+    const oc = ocRaw.stdout.trim().split(/\s+/).map(v => parseInt(v, 10) || 0);
+
+    /* Flat config — easy to parse from shell without jq */
+    const config = {
+      version: 4,
+      cpu_oc_l_freq:  oc[0] || 0,
+      cpu_oc_l_volt:  oc[1] || 0,
+      cpu_oc_b_freq:  oc[2] || 0,
+      cpu_oc_b_volt:  oc[3] || 0,
+      cpu_oc_p_freq:  oc[4] || 0,
+      cpu_oc_p_volt:  oc[5] || 0,
+      gpu_oc_freq:    oc[6] || 0,
+      gpu_oc_volt:    oc[7] || 0,
+      gpu_oc_vsram:   oc[8] || 0,
+    };
+
+    /* Add scaling limits */
     for (const cluster of state.cpuClusters) {
       const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
       const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
-      cpuLimits[cluster.id] = {
-        max: maxSel ? parseInt(maxSel.value, 10) : cluster.curMax,
-        min: minSel ? parseInt(minSel.value, 10) : cluster.curMin,
-      };
+      config[`cpu_max_${cluster.id}`] = maxSel ? parseInt(maxSel.value, 10) : cluster.curMax;
+      config[`cpu_min_${cluster.id}`] = minSel ? parseInt(minSel.value, 10) : cluster.curMin;
     }
-
-    const gpuCustom = state.gpuEntries
-      .filter(e => (e.modified || e.isNew) && !e.removing)
-      .map(e => ({ freq: e.freq, volt: e.volt }));
-
-    const config = {
-      version: 3,
-      cpu_limits: cpuLimits,
-      gpu_custom: gpuCustom,
-      saved_at: new Date().toISOString(),
-    };
+    config.saved_at = new Date().toISOString();
 
     const json = JSON.stringify(config);
     await exec(`mkdir -p ${CONFIG_DIR} && printf '%s' '${json.replace(/'/g, "'\\''")}' > ${CONFIG_FILE}`);
