@@ -675,6 +675,16 @@
     renderAll();
   }
 
+  /* ─── Exec with error check ───────────────────────────────────────── */
+  async function execChecked(cmd, label) {
+    const res = await exec(cmd);
+    if (res.errno !== 0) {
+      console.error(`[OC] ${label} FAILED (errno=${res.errno}): ${res.stderr}`);
+      showToast(`Error: ${label} — ${res.stderr || 'errno=' + res.errno}`, 'error');
+    }
+    return res;
+  }
+
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
     showToast('Applying changes...', 'info');
@@ -683,6 +693,7 @@
     /* --- CPU OC: detect entries above stock max, apply via kpm_oc --- */
     const clusterParamMap = { 0: 'l', 4: 'b', 7: 'p' };
     let cpuOcNeeded = false;
+    let cpuReliftNeeded = false;
 
     for (const cluster of state.cpuClusters) {
       const key = clusterParamMap[cluster.id];
@@ -699,9 +710,15 @@
         ? Math.max(...origEntries.map(e => e.freq))
         : 0;
 
-      if (maxEntry && maxEntry.freq > origMax && (maxEntry.isNew || maxEntry.modified)) {
-        await exec(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`);
-        await exec(`echo ${maxEntry.volt} > ${KS_PARAMS}cpu_oc_${key}_volt`);
+      /* Apply CPU OC when:
+       * - The max entry is a newly added OPP (isNew), OR
+       * - The max entry's freq or voltage was modified, OR
+       * - The max entry's freq is above stock origMax (covers re-apply after reload)
+       * The kernel module patches CSRAM LUT[0] + cpufreq policy max.
+       */
+      if (maxEntry && (maxEntry.isNew || maxEntry.modified || maxEntry.freq > origMax)) {
+        await execChecked(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`, `CPU ${key} freq`);
+        await execChecked(`echo ${maxEntry.volt} > ${KS_PARAMS}cpu_oc_${key}_volt`, `CPU ${key} volt`);
         cpuOcNeeded = true;
       }
 
@@ -711,21 +728,22 @@
       if (maxSel) {
         const v = parseInt(maxSel.value, 10);
         if (!isNaN(v) && v > 0) {
-          await exec(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`);
+          await execChecked(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`, `scaling_max p${cluster.id}`);
           cluster.curMax = v;
+          if (v > origMax) cpuReliftNeeded = true;
         }
       }
       if (minSel) {
         const v = parseInt(minSel.value, 10);
         if (!isNaN(v) && v > 0) {
-          await exec(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`);
+          await execChecked(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`, `scaling_min p${cluster.id}`);
           cluster.curMin = v;
         }
       }
     }
 
-    if (cpuOcNeeded) {
-      await exec(`echo 1 > ${KS_PARAMS}cpu_oc_apply`);
+    if (cpuOcNeeded || cpuReliftNeeded) {
+      await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply');
       anyOcApplied = true;
     }
 
@@ -738,14 +756,14 @@
       ? Math.max(...state.originalGpu.map(e => e.freq))
       : 0;
 
-    if (gpuMax && gpuMax.freq > origGpuMax && (gpuMax.isNew || gpuMax.modified)) {
+    if (gpuMax && (gpuMax.isNew || gpuMax.modified || gpuMax.freq > origGpuMax)) {
       /* gpu_target_* expects OPP-table units (gpufreqv2 value, not µV) */
       const voltStep = Math.round(gpuMax.volt / 10);
       const vsramStep = gpuMax.vsram > 0 ? Math.round(gpuMax.vsram / 10) : voltStep;
-      await exec(`echo ${gpuMax.freq} > ${KS_PARAMS}gpu_target_freq`);
-      await exec(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`);
-      await exec(`echo ${vsramStep} > ${KS_PARAMS}gpu_target_vsram`);
-      await exec(`echo 1 > ${KS_PARAMS}gpu_oc_apply`);
+      await execChecked(`echo ${gpuMax.freq} > ${KS_PARAMS}gpu_target_freq`, 'gpu freq');
+      await execChecked(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`, 'gpu volt');
+      await execChecked(`echo ${vsramStep} > ${KS_PARAMS}gpu_target_vsram`, 'gpu vsram');
+      await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply');
       anyOcApplied = true;
     }
 
@@ -759,7 +777,16 @@
     }
 
     await saveConfig();
-    showToast('Changes applied & saved!', 'success');
+
+    /* Read back results from kernel module for user feedback */
+    if (anyOcApplied) {
+      const cpuRes = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
+      const gpuRes = await exec(`cat ${KS_PARAMS}gpu_oc_result 2>/dev/null`);
+      const details = [cpuRes.stdout.trim(), gpuRes.stdout.trim()].filter(s => s).join(' | ');
+      showToast(`Applied & saved! ${details}`, 'success');
+    } else {
+      showToast('Settings saved!', 'success');
+    }
   }
 
   /* ─── Save Config ─────────────────────────────────────────────────── */
@@ -815,6 +842,14 @@
     applyAll,
     scanAndLoad,
     loadData,
+    /* Diagnostic: run from browser console via OC.diagExec() */
+    diagExec: async () => {
+      const r = await exec('id -Z && cat /proc/self/attr/current && echo "---" && echo test_write > /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1; echo "exit=$?" && cat /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1');
+      const msg = `exec context: errno=${r.errno}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`;
+      console.log('[OC diag]', msg);
+      showToast(msg.substring(0, 200), r.errno === 0 ? 'info' : 'error');
+      return r;
+    },
   };
 
   /* ─── Init ────────────────────────────────────────────────────────── */
