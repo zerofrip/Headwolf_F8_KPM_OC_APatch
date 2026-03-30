@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v4.0) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (service.sh v6.10) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -14,9 +14,9 @@ APatch/KernelSU module (service.sh v4.0) providing CPU and GPU overclocking for 
 
 ## Structure
 
-```
+```text
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v6.5)
+├── kpm_oc.ko                       # Compiled kernel module (v6.10)
 ├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
 ├── service.sh                      # Boot-time service (v4.0)
 ├── tools/
@@ -35,15 +35,16 @@ APatch/KernelSU module (service.sh v4.0) providing CPU and GPU overclocking for 
    - Loads patched core, then vendor companions
    - Verifies `gpu_working_opp_table[0] ≥ 1450000 KHz`; rolls back if not
 2. Parse `oc_config.json` for saved OC params (CPU + GPU) and build `insmod` parameter string
-3. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3600000 gpu_target_freq=1500000 ...`)
+3. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
    - CPU OC auto-applies if any `cpu_oc_*_freq` param is nonzero
 4. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
-5. Log CPU/GPU OC results
-6. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
-7. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
-8. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+5. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
+6. Log CPU/GPU OC results
+7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
 
 ### Config Persistence
 
@@ -93,6 +94,9 @@ echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply
 ### Method A — Runtime memory patch (default, no reboot)
 
 `kpm_oc.ko` patches `g_gpu_default_opp_table[0]` and the working table at runtime.
+In v6.10 a lifetime GPU relift kthread re-runs the runtime patch every 500 ms,
+so GPU power-cycle / runtime table refreshes do not silently drop the OC back
+to stock after leaving the WebUI.
 Default target on boot: **1450 MHz @ 87500 µV**.
 
 ```bash
@@ -103,6 +107,12 @@ echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply
 cat /sys/module/kpm_oc/parameters/gpu_oc_result
 # OK:patched=3,freq=1450000->1467000,...
 ```
+
+Notes:
+
+- `patched=3` is the normal success state on this device: `default_opp[0]` + `working_table[0]` were patched. `signed_table` may be unavailable at runtime and is not required for the common success path.
+- Some apps (for example Franco Kernel Manager) may still display **1400 MHz** as GPU max because they read the stock devfreq `max_freq` node. The effective OC state should be checked via `/proc/gpufreqv2/gpu_working_opp_table` and `gpu_oc_result`.
+- Writing `/sys/class/devfreq/13000000.mali/max_freq` is best-effort only on this target. It may remain stock even while the GPU working OPP table has been overclocked successfully.
 
 ### Method B — Binary-patched `.ko` reload (opt-in, persistent across GPUEB re-init)
 
@@ -139,6 +149,8 @@ The generated file `mtk_gpufreq_mt6897_1450.ko` (1450 MHz) is included in this r
 | CPU available freqs | `/sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_available_frequencies` |
 | GPU freq + volt + vsram | `/proc/gpufreqv2/gpu_working_opp_table` |
 | GPU status | `/proc/gpufreqv2/gpufreq_status` |
+
+For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
 
 ## Installation
 

@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v4.0
+# Headwolf F8 KPM OC Manager - Service Script v6.10
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 # Restores OC config (CPU/GPU) and scaling limits from saved config
 # Optional: safe-ish boot-time reload of GPUFreq modules with patched core ko
