@@ -41,6 +41,16 @@ load_mod() {
     insmod "${ko}" 2>/dev/null
 }
 
+resolve_gpu_devfreq_path() {
+    for path in /sys/class/devfreq/*mali*; do
+        if [ -d "${path}" ]; then
+            echo "${path}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 verify_gpu_top_freq() {
     top_line=$(cat /proc/gpufreqv2/gpu_working_opp_table 2>/dev/null | head -1)
     top_freq=$(echo "${top_line}" | sed -n 's/.*freq: *\([0-9]*\).*/\1/p')
@@ -184,6 +194,25 @@ logi "GPU OC result (auto on load): ${GPU_OC_RES}"
 CPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null)
 [ -n "${CPU_OC_RES}" ] && logi "CPU OC result (auto on load): ${CPU_OC_RES}"
 
+# GPU relift pass: re-apply GPU OC and restore devfreq max ceiling.
+if [ -f "${CONFIG_FILE}" ]; then
+    gpu_freq=$(json_int gpu_oc_freq)
+    if [ -n "${gpu_freq}" ] && [ "${gpu_freq}" -gt 0 ] 2>/dev/null; then
+        echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+        sleep 1
+
+        GPU_DEVFREQ=$(resolve_gpu_devfreq_path)
+        if [ -n "${GPU_DEVFREQ}" ] && [ -w "${GPU_DEVFREQ}/max_freq" ]; then
+            gpu_hz=$((gpu_freq * 1000))
+            echo "${gpu_hz}" > "${GPU_DEVFREQ}/max_freq" 2>/dev/null
+            cur_max=$(cat "${GPU_DEVFREQ}/max_freq" 2>/dev/null)
+            logi "GPU relift pass: target=${gpu_hz} max_freq=${cur_max} path=${GPU_DEVFREQ}"
+        else
+            logi "GPU relift pass: devfreq max_freq not writable"
+        fi
+    fi
+fi
+
 # Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:raw32|...)
 CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
 if [ -z "${CPU_RAW}" ] || [ "${CPU_RAW}" = "READY" ]; then
@@ -219,13 +248,7 @@ echo "${GPU_DATA}" > "${GPU_OPP_FILE}" 2>/dev/null
 logi "GPU OPP table exported: $(echo "${GPU_DATA}" | wc -c) bytes"
 
 # Store GPU devfreq path for WebUI
-GPU_DEVFREQ=""
-for path in /sys/class/devfreq/*mali*; do
-    if [ -d "${path}" ]; then
-        GPU_DEVFREQ="${path}"
-        break
-    fi
-done
+GPU_DEVFREQ="$(resolve_gpu_devfreq_path)"
 if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi

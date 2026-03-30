@@ -14,6 +14,8 @@
   const CONFIG_FILE = `${CONFIG_DIR}/oc_config.json`;
   const CPU_OPP_FILE = `${CONFIG_DIR}/cpu_opp_table`;
   const GPU_OPP_FILE = `${CONFIG_DIR}/gpu_opp_table`;
+  const GPU_DEVFREQ_PATH_FILE = `${CONFIG_DIR}/gpu_devfreq_path`;
+  const GPU_DEVFREQ_FALLBACK = '/sys/class/devfreq/13000000.mali';
 
   const CPU_POLICIES = [0, 4, 7];
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
@@ -549,6 +551,7 @@
     showToast('Reloading OPP data...', 'info');
     if (state.moduleLoaded) {
       await reliftCpuConstraintsIfNeeded();
+      await reliftGpuConstraintsIfNeeded();
       await exec(`echo 1 > ${KS_PARAMS}apply 2>/dev/null`);
       await new Promise(r => setTimeout(r, 500));
     }
@@ -728,6 +731,51 @@
     return actual;
   }
 
+  async function resolveGpuDevfreqPath() {
+    const fileRes = await exec(`cat ${GPU_DEVFREQ_PATH_FILE} 2>/dev/null`);
+    const fromFile = (fileRes.stdout || '').trim();
+    if (fromFile.startsWith('/sys/class/devfreq/')) {
+      const chk = await exec(`[ -d '${fromFile}' ] && echo OK || echo NG`);
+      if (chk.stdout.trim() === 'OK') return fromFile;
+    }
+
+    const chkFallback = await exec(`[ -d '${GPU_DEVFREQ_FALLBACK}' ] && echo OK || echo NG`);
+    if (chkFallback.stdout.trim() === 'OK') return GPU_DEVFREQ_FALLBACK;
+
+    return '';
+  }
+
+  async function ensureGpuMax(targetKHz) {
+    if (!targetKHz || targetKHz <= 0) return 0;
+
+    const targetHz = Math.round(targetKHz * 1000);
+    let actual = 0;
+    const devfreqPath = await resolveGpuDevfreqPath();
+    if (!devfreqPath) return 0;
+
+    for (let i = 0; i < 3; i++) {
+      await execChecked(`echo ${targetHz} > ${devfreqPath}/max_freq`, 'gpu max_freq');
+      const maxRes = await exec(`cat ${devfreqPath}/max_freq 2>/dev/null`);
+      actual = parseInt(maxRes.stdout.trim(), 10) || 0;
+      if (actual >= targetHz) return actual;
+
+      await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply retry');
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    return actual;
+  }
+
+  async function reliftGpuConstraintsIfNeeded() {
+    const fRes = await exec(`cat ${KS_PARAMS}gpu_target_freq 2>/dev/null`);
+    const f = parseInt(fRes.stdout.trim(), 10) || 0;
+    if (f <= 0) return;
+
+    await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply(relift)');
+    await new Promise(r => setTimeout(r, 250));
+    await ensureGpuMax(f);
+  }
+
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
     showToast('Applying changes...', 'info');
@@ -839,6 +887,7 @@
       await execChecked(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`, 'gpu volt');
       await execChecked(`echo ${vsramStep} > ${KS_PARAMS}gpu_target_vsram`, 'gpu vsram');
       await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply');
+      await ensureGpuMax(gpuMax.freq);
       anyOcApplied = true;
     }
 
