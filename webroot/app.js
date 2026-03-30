@@ -548,6 +548,7 @@
   async function scanAndLoad() {
     showToast('Reloading OPP data...', 'info');
     if (state.moduleLoaded) {
+      await reliftCpuConstraintsIfNeeded();
       await exec(`echo 1 > ${KS_PARAMS}apply 2>/dev/null`);
       await new Promise(r => setTimeout(r, 500));
     }
@@ -692,6 +693,41 @@
     return res;
   }
 
+  async function reliftCpuConstraintsIfNeeded() {
+    const bRes = await exec(`cat ${KS_PARAMS}cpu_oc_b_freq 2>/dev/null`);
+    const pRes = await exec(`cat ${KS_PARAMS}cpu_oc_p_freq 2>/dev/null`);
+    const lRes = await exec(`cat ${KS_PARAMS}cpu_oc_l_freq 2>/dev/null`);
+    const b = parseInt(bRes.stdout.trim(), 10) || 0;
+    const p = parseInt(pRes.stdout.trim(), 10) || 0;
+    const l = parseInt(lRes.stdout.trim(), 10) || 0;
+
+    if (b > 0 || p > 0 || l > 0) {
+      await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply(relift)');
+      await new Promise(r => setTimeout(r, 250));
+
+      if (l > 0) await ensureCpuMax(0, l);
+      if (b > 0) await ensureCpuMax(4, b);
+      if (p > 0) await ensureCpuMax(7, p);
+    }
+  }
+
+  async function ensureCpuMax(policyId, target) {
+    if (!target || target <= 0) return target;
+
+    let actual = 0;
+    for (let i = 0; i < 3; i++) {
+      await execChecked(`echo ${target} > /sys/devices/system/cpu/cpufreq/policy${policyId}/scaling_max_freq`, `scaling_max p${policyId}`);
+      const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policyId}/scaling_max_freq 2>/dev/null`);
+      actual = parseInt(maxRes.stdout.trim(), 10) || 0;
+      if (actual >= target) return actual;
+
+      await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, `cpu_oc_apply retry p${policyId}`);
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    return actual;
+  }
+
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
     showToast('Applying changes...', 'info');
@@ -735,8 +771,8 @@
       if (maxSel) {
         const v = parseInt(maxSel.value, 10);
         if (!isNaN(v) && v > 0) {
-          await execChecked(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`, `scaling_max p${cluster.id}`);
-          cluster.curMax = v;
+          const applied = await ensureCpuMax(cluster.id, v);
+          cluster.curMax = applied > 0 ? applied : v;
           if (v > origMax) cpuReliftNeeded = true;
         }
       }
@@ -772,8 +808,8 @@
           ? active.reduce((m, e) => e.freq > m.freq ? e : m)
           : null;
         if (maxEntry && maxEntry.freq > 0) {
-          await execChecked(`echo ${maxEntry.freq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`, `post-apply scaling_max p${cluster.id}`);
-          cluster.curMax = maxEntry.freq;
+          const applied = await ensureCpuMax(cluster.id, maxEntry.freq);
+          cluster.curMax = applied > 0 ? applied : maxEntry.freq;
         }
 
         /* Re-read actual value to confirm */
