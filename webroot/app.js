@@ -615,6 +615,13 @@
       if (cluster) {
         cluster.entries.push(newEntry);
         cluster.entries.sort((a, b) => a.freq - b.freq);
+        if (!cluster.freqs.includes(freq)) {
+          cluster.freqs.push(freq);
+          cluster.freqs.sort((a, b) => a - b);
+        }
+        if (!cluster.curMax || freq > cluster.curMax) {
+          cluster.curMax = freq;
+        }
       }
     } else {
       state.gpuEntries.push(newEntry);
@@ -745,6 +752,38 @@
     if (cpuOcNeeded || cpuReliftNeeded) {
       await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply');
       anyOcApplied = true;
+
+      /* After OC apply, the kernel module patches LUT + lifts freq_qos.
+       * Re-read scaling_available_frequencies (now includes OC freq) and
+       * scaling_max_freq (now lifted to OC target) for each cluster.
+       * Then set scaling_max_freq to the OC target and update the UI.
+       */
+      await new Promise(r => setTimeout(r, 300));
+      for (const cluster of state.cpuClusters) {
+        const freqRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_available_frequencies 2>/dev/null`);
+        if (freqRes.stdout.trim()) {
+          cluster.freqs = freqRes.stdout.trim().split(/\s+/)
+            .map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b);
+        }
+
+        /* Set scaling_max_freq to the OC target (the max entry we just applied) */
+        const active = cluster.entries.filter(e => !e.removing);
+        const maxEntry = active.length > 0
+          ? active.reduce((m, e) => e.freq > m.freq ? e : m)
+          : null;
+        if (maxEntry && maxEntry.freq > 0) {
+          await execChecked(`echo ${maxEntry.freq} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq`, `post-apply scaling_max p${cluster.id}`);
+          cluster.curMax = maxEntry.freq;
+        }
+
+        /* Re-read actual value to confirm */
+        const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq 2>/dev/null`);
+        const actualMax = parseInt(maxRes.stdout.trim(), 10);
+        if (actualMax > 0) cluster.curMax = actualMax;
+      }
+
+      /* Keep selects/chips in sync with post-apply OC values. */
+      renderAll();
     }
 
     /* --- GPU OC: detect top entry above stock max, apply via kpm_oc --- */
@@ -821,10 +860,9 @@
 
     /* Add scaling limits */
     for (const cluster of state.cpuClusters) {
-      const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
-      const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
-      config[`cpu_max_${cluster.id}`] = maxSel ? parseInt(maxSel.value, 10) : cluster.curMax;
-      config[`cpu_min_${cluster.id}`] = minSel ? parseInt(minSel.value, 10) : cluster.curMin;
+      /* Persist resolved runtime values to avoid stale select fallback. */
+      config[`cpu_max_${cluster.id}`] = parseInt(cluster.curMax, 10) || 0;
+      config[`cpu_min_${cluster.id}`] = parseInt(cluster.curMin, 10) || 0;
     }
     config.saved_at = new Date().toISOString();
 

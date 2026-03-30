@@ -152,6 +152,29 @@ if [ -f "${CONFIG_FILE}" ]; then
         fi
     done
     logi "CPU scaling limits restored from config"
+
+    # CPU OC relift pass: vendor constraints can race and clamp first write.
+    # Re-run cpu_oc_apply, then restore scaling_max once more.
+    cpu_oc_enabled=0
+    for key in cpu_oc_l_freq cpu_oc_b_freq cpu_oc_p_freq; do
+        v=$(json_int "${key}")
+        if [ -n "${v}" ] && [ "${v}" -gt 0 ] 2>/dev/null; then
+            cpu_oc_enabled=1
+            break
+        fi
+    done
+
+    if [ "${cpu_oc_enabled}" = "1" ]; then
+        echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
+        sleep 1
+        for policy in 0 4 7; do
+            max_val=$(json_int "cpu_max_${policy}")
+            if [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null; then
+                echo "$max_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null
+            fi
+        done
+        logi "CPU OC relift pass completed"
+    fi
 fi
 
 # GPU OC is applied automatically on module load (kpm_oc_init calls set_gpu_oc()).
