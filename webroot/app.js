@@ -715,7 +715,8 @@
 
     let actual = 0;
     for (let i = 0; i < 3; i++) {
-      await execChecked(`echo ${target} > /sys/devices/system/cpu/cpufreq/policy${policyId}/scaling_max_freq`, `scaling_max p${policyId}`);
+      /* Best-effort: scaling_max_freq may not be writable in APatch context. */
+      await exec(`echo ${target} > /sys/devices/system/cpu/cpufreq/policy${policyId}/scaling_max_freq 2>/dev/null`);
       const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policyId}/scaling_max_freq 2>/dev/null`);
       actual = parseInt(maxRes.stdout.trim(), 10) || 0;
       if (actual >= target) return actual;
@@ -750,7 +751,8 @@
     if (!devfreqPath) return 0;
 
     for (let i = 0; i < 3; i++) {
-      await execChecked(`echo ${targetHz} > ${devfreqPath}/max_freq`, 'gpu max_freq');
+      /* Best-effort: devfreq max_freq may not be writable in APatch context. */
+      await exec(`echo ${targetHz} > ${devfreqPath}/max_freq 2>/dev/null`);
       const maxRes = await exec(`cat ${devfreqPath}/max_freq 2>/dev/null`);
       actual = parseInt(maxRes.stdout.trim(), 10) || 0;
       if (actual >= targetHz) return actual;
