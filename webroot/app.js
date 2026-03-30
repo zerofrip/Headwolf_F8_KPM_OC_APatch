@@ -707,10 +707,6 @@
     if (b > 0 || p > 0 || l > 0) {
       await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply(relift)');
       await new Promise(r => setTimeout(r, 250));
-
-      if (l > 0) await ensureCpuMax(0, l);
-      if (b > 0) await ensureCpuMax(4, b);
-      if (p > 0) await ensureCpuMax(7, p);
     }
   }
 
@@ -773,7 +769,6 @@
 
     await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply(relift)');
     await new Promise(r => setTimeout(r, 250));
-    await ensureGpuMax(f);
   }
 
   /* ─── Apply All Changes ───────────────────────────────────────────── */
