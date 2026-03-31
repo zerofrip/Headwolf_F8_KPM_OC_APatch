@@ -1,24 +1,26 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v6.10) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (service.sh v7.0) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
 - **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
+- **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
 - **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
+- **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPU Module Reload** *(opt-in)* — Replaces `mtk_gpufreq_mt6897.ko` with a pre-patched binary that encodes the new top OPP, bypassing GPUEB re-initialization
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
-- **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt, set scaling limits, one-tap apply
+- **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, one-tap apply
 - **Configuration Persistence** — OC params and scaling limits saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```text
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v6.10)
+├── kpm_oc.ko                       # Compiled kernel module (v7.0)
 ├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
-├── service.sh                      # Boot-time service (v4.0)
+├── service.sh                      # Boot-time service (v7.0)
 ├── tools/
 │   ├── patch_mtk_gpufreq_1450.py   # Binary patcher: set custom top GPU OPP in .ko
 │   └── auto_tune_top_opp.sh        # Helper: auto-selects top OPP for reload
@@ -89,20 +91,37 @@ echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply
 # cpu_oc_result: P:3350000->3600000KHz@1100000uV
 ```
 
+### CPU Per-LUT Voltage Override (v7.0)
+
+Directly patches any CSRAM LUT entry, bypassing stock voltage constraints. Original values are saved on first override and restored when `clear` is written.
+
+| Parameter | Description |
+|-----------|-------------|
+| `cpu_volt_override` | Write `cl:idx:volt_uv ...` (cluster:lut_index:voltage_µV) |
+| `cpu_volt_ov_result` | Result string (read-only) |
+
+```bash
+# Override B cluster LUT[5] to 900000 µV
+echo '1:5:900000' > /sys/module/kpm_oc/parameters/cpu_volt_override
+# cpu_volt_ov_result: B[5]=900000uV
+
+# Clear all overrides (restores original CSRAM values)
+echo clear > /sys/module/kpm_oc/parameters/cpu_volt_override
+```
+
 ## GPU Overclocking
 
 ### Method A — Runtime memory patch (default, no reboot)
 
 `kpm_oc.ko` patches `g_gpu_default_opp_table[0]` and the working table at runtime.
-In v6.10 a lifetime GPU relift kthread re-runs the runtime patch every 500 ms,
-so GPU power-cycle / runtime table refreshes do not silently drop the OC back
-to stock after leaving the WebUI.
-Default target on boot: **1450 MHz @ 87500 µV**.
+A lifetime GPU relift kthread re-runs all GPU patches every 500 ms,
+so GPU power-cycle / runtime table refreshes do not silently drop OC back to stock.
+Default target on boot: **1450 MHz @ 87500 (= 875.0 mV)**.
 
 ```bash
 echo 1467000 > /sys/module/kpm_oc/parameters/gpu_target_freq
-echo  91875 > /sys/module/kpm_oc/parameters/gpu_target_volt
-echo  91875 > /sys/module/kpm_oc/parameters/gpu_target_vsram
+echo   91875 > /sys/module/kpm_oc/parameters/gpu_target_volt
+echo   91875 > /sys/module/kpm_oc/parameters/gpu_target_vsram
 echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply
 cat /sys/module/kpm_oc/parameters/gpu_oc_result
 # OK:patched=3,freq=1450000->1467000,...
@@ -110,9 +129,34 @@ cat /sys/module/kpm_oc/parameters/gpu_oc_result
 
 Notes:
 
-- `patched=3` is the normal success state on this device: `default_opp[0]` + `working_table[0]` were patched. `signed_table` may be unavailable at runtime and is not required for the common success path.
+- `patched=3` is the normal success state on this device: `default_opp[0]` + `working_table[0]` were patched. `signed_table` may be unavailable at runtime and is not required for the common success path. `patched=11` (`3 | 8`) means per-OPP voltage overrides are also active.
 - Some apps (for example Franco Kernel Manager) may still display **1400 MHz** as GPU max because they read the stock devfreq `max_freq` node. The effective OC state should be checked via `/proc/gpufreqv2/gpu_working_opp_table` and `gpu_oc_result`.
 - Writing `/sys/class/devfreq/13000000.mali/max_freq` is best-effort only on this target. It may remain stock even while the GPU working OPP table has been overclocked successfully.
+
+### GPU Per-OPP Voltage Override (v7.0)
+
+Directly patches any GPU OPP entry in both `g_gpu_default_opp_table` and the working table, bypassing the vendor `fix_custom_freq_volt` function which rejects writes when DVFSState validation fails (GPU powered off) or voltage is clamped.
+
+| Parameter | Description |
+|-----------|-------------|
+| `gpu_volt_override` | Write `idx:volt[:vsram] ...` (10µV step units, same as gpufreqv2) |
+| `gpu_volt_ov_result` | Result string (read-only) |
+
+Overrides are persisted by the GPU relift kthread (500 ms interval) and survive GPU power-cycles.
+
+```bash
+# Override OPP[1] to 90000 (= 900.0 mV)
+echo '1:90000:90000' > /sys/module/kpm_oc/parameters/gpu_volt_override
+
+# Override multiple OPPs at once
+echo '0:95000:95000 1:85000:85000 2:84000:84000' > /sys/module/kpm_oc/parameters/gpu_volt_override
+
+# Clear all overrides (restores original default_opp_table values)
+echo clear > /sys/module/kpm_oc/parameters/gpu_volt_override
+
+# Verify
+cat /proc/gpufreqv2/gpu_working_opp_table | head -5
+```
 
 ### Method B — Binary-patched `.ko` reload (opt-in, persistent across GPUEB re-init)
 
@@ -135,10 +179,11 @@ The generated file `mtk_gpufreq_mt6897_1450.ko` (1450 MHz) is included in this r
 |--------|-----------|
 | CPU CSRAM rescan | `echo 1 > /sys/module/kpm_oc/parameters/apply` |
 | CPU OC apply | `echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply` |
+| CPU per-LUT volt override | `echo 'cl:idx:volt_uv ...' > /sys/module/kpm_oc/parameters/cpu_volt_override` |
 | GPU OC re-apply | `echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply` |
+| GPU per-OPP volt override | `echo 'idx:volt[:vsram] ...' > /sys/module/kpm_oc/parameters/gpu_volt_override` |
 | CPU max freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_max_freq` |
 | CPU min freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_min_freq` |
-| GPU custom volt | `echo "<freq> <volt_step>" > /proc/gpufreqv2/fix_custom_freq_volt` |
 | GPU fixed OPP index | `echo <idx> > /proc/gpufreqv2/fix_target_opp_index` |
 
 ## Data Sources
@@ -149,6 +194,8 @@ The generated file `mtk_gpufreq_mt6897_1450.ko` (1450 MHz) is included in this r
 | CPU available freqs | `/sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_available_frequencies` |
 | GPU freq + volt + vsram | `/proc/gpufreqv2/gpu_working_opp_table` |
 | GPU status | `/proc/gpufreqv2/gpufreq_status` |
+| CPU volt override result | `kpm_oc.ko` → `cpu_volt_ov_result` sysfs |
+| GPU volt override result | `kpm_oc.ko` → `gpu_volt_ov_result` sysfs |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
 

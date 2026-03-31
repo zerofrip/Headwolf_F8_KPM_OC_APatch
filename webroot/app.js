@@ -867,6 +867,39 @@
       renderAll();
     }
 
+    /* CPU: per-LUT voltage overrides via kernel module (CSRAM direct write).
+     * Format: "cluster:lut_idx:volt_uv cluster:lut_idx:volt_uv ..."
+     * Cluster mapping: policy0→0(L), policy4→1(B), policy7→2(P)
+     * NOTE: CSRAM LUT is stored in DESCENDING freq order (index 0 = highest),
+     * but WebUI entries are sorted ASCENDING. Convert index accordingly.
+     */
+    {
+      const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
+      const voltOverrides = [];
+      for (const cluster of state.cpuClusters) {
+        const ci = clusterIdxMap[cluster.id];
+        if (ci === undefined) continue;
+        const activeEntries = cluster.entries.filter(e => !e.removing);
+        const entryCount = activeEntries.length;
+        for (let i = 0; i < cluster.entries.length; i++) {
+          const entry = cluster.entries[i];
+          if (!entry.removing && (entry.modified || entry.isNew) &&
+              entry.volt !== entry.origVolt) {
+            /* Reverse index: WebUI ascending [0]=lowest → CSRAM descending [N-1] */
+            const lutIdx = entryCount - 1 - i;
+            voltOverrides.push(`${ci}:${lutIdx}:${entry.volt}`);
+          }
+        }
+      }
+      if (voltOverrides.length > 0) {
+        const overrideStr = voltOverrides.join(' ');
+        await execChecked(
+          `echo '${overrideStr}' > ${KS_PARAMS}cpu_volt_override`,
+          'cpu_volt_override');
+        anyOcApplied = true;
+      }
+    }
+
     /* --- GPU OC: detect top entry above stock max, apply via kpm_oc --- */
     const activeGpu = state.gpuEntries.filter(e => !e.removing);
     const gpuMax = activeGpu.length > 0
@@ -888,12 +921,27 @@
       anyOcApplied = true;
     }
 
-    /* GPU: voltage-only tweaks on existing frequencies (safe for fix_custom_freq_volt) */
-    for (const entry of state.gpuEntries) {
-      if (entry.modified && !entry.isNew && !entry.removing &&
-          entry.freq === entry.origFreq && entry.volt !== entry.origVolt) {
-        const gpuVoltStep = Math.round(entry.volt / 10);
-        await exec(`echo "${entry.freq} ${gpuVoltStep}" > /proc/gpufreqv2/fix_custom_freq_volt`);
+    /* GPU: per-OPP voltage overrides via kernel module (direct memory patch).
+     * Bypasses driver fix_custom_freq_volt validation (DVFSState, volt clamp).
+     * Format: "opp_idx:volt:vsram opp_idx:volt:vsram ..."
+     */
+    {
+      const voltOverrides = [];
+      for (let i = 0; i < state.gpuEntries.length; i++) {
+        const entry = state.gpuEntries[i];
+        if (!entry.removing && (entry.modified || entry.isNew) &&
+            entry.volt !== entry.origVolt) {
+          const voltStep = Math.round(entry.volt / 10);
+          const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
+          voltOverrides.push(`${i}:${voltStep}:${vsramStep}`);
+        }
+      }
+      if (voltOverrides.length > 0) {
+        const overrideStr = voltOverrides.join(' ');
+        await execChecked(
+          `echo '${overrideStr}' > ${KS_PARAMS}gpu_volt_override`,
+          'gpu_volt_override');
+        anyOcApplied = true;
       }
     }
 
@@ -903,7 +951,14 @@
     if (anyOcApplied) {
       const cpuRes = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
       const gpuRes = await exec(`cat ${KS_PARAMS}gpu_oc_result 2>/dev/null`);
-      const details = [cpuRes.stdout.trim(), gpuRes.stdout.trim()].filter(s => s).join(' | ');
+      const cpuVoltRes = await exec(`cat ${KS_PARAMS}cpu_volt_ov_result 2>/dev/null`);
+      const gpuVoltRes = await exec(`cat ${KS_PARAMS}gpu_volt_ov_result 2>/dev/null`);
+      const details = [
+        cpuRes.stdout.trim(),
+        gpuRes.stdout.trim(),
+        cpuVoltRes.stdout.trim(),
+        gpuVoltRes.stdout.trim(),
+      ].filter(s => s && s !== 'NOOP' && s !== '(null)').join(' | ');
       showToast(`Applied & saved! ${details}`, 'success');
     } else {
       showToast('Settings saved!', 'success');
