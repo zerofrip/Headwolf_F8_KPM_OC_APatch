@@ -1,14 +1,16 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v7.0) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
 - **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
 - **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
+- **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `mtk_cpufreq_hw_fast_switch` and `mtk_cpufreq_hw_target_index` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
 - **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
+- **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU Module Reload** *(opt-in)* — Replaces `mtk_gpufreq_mt6897.ko` with a pre-patched binary that encodes the new top OPP, bypassing GPUEB re-initialization
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, one-tap apply
@@ -18,7 +20,7 @@ APatch/KernelSU module (service.sh v7.0) providing CPU and GPU overclocking for 
 
 ```text
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v7.0)
+├── kpm_oc.ko                       # Compiled kernel module (v7.2)
 ├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
 ├── service.sh                      # Boot-time service (v7.0)
 ├── tools/
@@ -116,6 +118,9 @@ echo clear > /sys/module/kpm_oc/parameters/cpu_volt_override
 `kpm_oc.ko` patches `g_gpu_default_opp_table[0]` and the working table at runtime.
 A lifetime GPU relift kthread re-runs all GPU patches every 500 ms,
 so GPU power-cycle / runtime table refreshes do not silently drop OC back to stock.
+The GPUEB kprobe countermeasure (v7.2) additionally re-patches OPP voltages
+immediately before every GPU DVFS commit, eliminating the window where GPUEB
+could revert the voltage between relift cycles.
 Default target on boot: **1450 MHz @ 87500 (= 875.0 mV)**.
 
 ```bash

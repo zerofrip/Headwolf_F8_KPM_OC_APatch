@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v7.0
+# Headwolf F8 KPM OC Manager - Service Script v7.2
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 # Restores OC config (CPU/GPU) and scaling limits from saved config
 # Optional: safe-ish boot-time reload of GPUFreq modules with patched core ko
@@ -19,6 +19,15 @@ GPU_VENDOR_PWRTHROTTLE_KO="${GPU_VENDOR_DIR}/mtk_gpu_power_throttling.ko"
 GPU_VENDOR_HAL_KO="${GPU_VENDOR_DIR}/mtk_gpu_hal.ko"
 
 mkdir -p "${CONFIG_DIR}" 2>/dev/null
+
+# On first install, seed user config from the bundled default.
+# On module updates the existing oc_config.json is preserved so
+# user-customised settings are not overwritten.
+DEFAULT_CONFIG="${MODDIR}/oc_config.default.json"
+if [ ! -f "${CONFIG_FILE}" ] && [ -f "${DEFAULT_CONFIG}" ]; then
+    cp "${DEFAULT_CONFIG}" "${CONFIG_FILE}"
+    logi "First install: seeded oc_config.json from bundled default"
+fi
 
 logi() {
     log -t "KPM_OC" "$1"
