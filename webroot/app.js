@@ -16,6 +16,10 @@
   const GPU_OPP_FILE = `${CONFIG_DIR}/gpu_opp_table`;
   const GPU_DEVFREQ_PATH_FILE = `${CONFIG_DIR}/gpu_devfreq_path`;
   const GPU_DEVFREQ_FALLBACK = '/sys/class/devfreq/13000000.mali';
+  const DRAM_DEVFREQ = '/sys/class/devfreq/mtk-dvfsrc-devfreq';
+  const DRAM_DATA_RATE = '/sys/bus/platform/drivers/dramc_drv/dram_data_rate';
+  const DRAM_TYPE_PATH = '/sys/bus/platform/drivers/dramc_drv/dram_type';
+  const VCORE_UV_PATH = '/sys/class/regulator/regulator.74/microvolts';
 
   const CPU_POLICIES = [0, 4, 7];
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
@@ -29,6 +33,18 @@
     gpuEntries: [],
     originalCpu: [],
     originalGpu: [],
+    ram: {
+      dataRate: 0,          // MHz (from dramc driver)
+      dramType: '',         // e.g. "LPDDR5X"
+      vcoreUv: 0,           // µV
+      curFreq: 0,           // Hz (devfreq)
+      minFreq: 0,           // Hz (devfreq)
+      maxFreq: 0,           // Hz (devfreq)
+      availableFreqs: [],   // Hz array
+      governor: '',
+      selectedMinFreq: 0,   // user selection (Hz)
+    },
+    originalRamMinFreq: 0,
   };
 
   /* ─── Shell Command Execution ─────────────────────────────────────── */
@@ -89,6 +105,30 @@
     }
     if (cmd.includes('lsmod') && cmd.includes('kpm_oc')) {
       return { errno: 0, stdout: 'kpm_oc 16384 0', stderr: '' };
+    }
+    if (cmd.includes('mtk-dvfsrc-devfreq/available_frequencies')) {
+      return { errno: 0, stdout: '800000000 1600000000 1866000000 2133000000 3094000000 4100000000 5500000000 6400000000', stderr: '' };
+    }
+    if (cmd.includes('mtk-dvfsrc-devfreq/cur_freq')) {
+      return { errno: 0, stdout: '6400000000', stderr: '' };
+    }
+    if (cmd.includes('mtk-dvfsrc-devfreq/min_freq')) {
+      return { errno: 0, stdout: '800000000', stderr: '' };
+    }
+    if (cmd.includes('mtk-dvfsrc-devfreq/max_freq') && !cmd.includes('mali')) {
+      return { errno: 0, stdout: '6400000000', stderr: '' };
+    }
+    if (cmd.includes('mtk-dvfsrc-devfreq/governor')) {
+      return { errno: 0, stdout: 'userspace', stderr: '' };
+    }
+    if (cmd.includes('dram_data_rate')) {
+      return { errno: 0, stdout: 'DRAM data rate = 6400', stderr: '' };
+    }
+    if (cmd.includes('dram_type')) {
+      return { errno: 0, stdout: 'DRAM tpye = 8', stderr: '' };
+    }
+    if (cmd.includes('regulator.74/microvolts')) {
+      return { errno: 0, stdout: '725000', stderr: '' };
     }
     return { errno: 0, stdout: '', stderr: '' };
   }
@@ -181,11 +221,21 @@
     return khz + ' KHz';
   }
 
+  function formatFreqHz(hz) {
+    if (hz >= 1000000000) return (hz / 1000000).toFixed(0) + ' MHz';
+    if (hz >= 1000000) return (hz / 1000000).toFixed(0) + ' MHz';
+    return hz + ' Hz';
+  }
+
   function formatVoltUv(uv) {
     if (!uv || uv === 0) return '—';
     if (uv >= 1000000) return (uv / 1000000).toFixed(4) + ' V';
     return (uv / 1000).toFixed(2) + ' mV';
   }
+
+  const DRAM_TYPE_MAP = {
+    0: 'Unknown', 5: 'LPDDR4', 6: 'LPDDR4X', 7: 'LPDDR5', 8: 'LPDDR5X',
+  };
 
   /* ─── Toast Notifications ─────────────────────────────────────────── */
   function showToast(message, type = 'info') {
@@ -426,6 +476,108 @@
     return html;
   }
 
+  /* ─── Render RAM Card ─────────────────────────────────────────────── */
+  function renderRamCard() {
+    const r = state.ram;
+    const maxFreqHz = r.availableFreqs.length > 0 ? Math.max(...r.availableFreqs) : 0;
+
+    const freqOptions = r.availableFreqs.map(f =>
+      `<option value="${f}" ${f === r.selectedMinFreq ? 'selected' : ''}>${formatFreqHz(f)}</option>`
+    ).join('');
+
+    let html = `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🧠</span>
+            DRAM · ${r.dramType || 'LPDDR'}
+          </div>
+          <div>
+            <span class="card-badge ram">${r.availableFreqs.length} OPPs</span>
+            <span class="info-chip ram" style="margin-left:4px">${r.governor || '—'}</span>
+          </div>
+        </div>
+
+        <!-- Status Grid -->
+        <div class="ram-status-grid">
+          <div class="ram-stat-item">
+            <span class="ram-stat-label">Data Rate</span>
+            <span class="ram-stat-value">${r.dataRate > 0 ? r.dataRate + ' MT/s' : '—'}</span>
+          </div>
+          <div class="ram-stat-item">
+            <span class="ram-stat-label">Vcore</span>
+            <span class="ram-stat-value">${r.vcoreUv > 0 ? (r.vcoreUv / 1000).toFixed(0) + ' mV' : '—'}</span>
+          </div>
+          <div class="ram-stat-item">
+            <span class="ram-stat-label">Current Freq</span>
+            <span class="ram-stat-value">${r.curFreq > 0 ? formatFreqHz(r.curFreq) : '—'}</span>
+          </div>
+          <div class="ram-stat-item">
+            <span class="ram-stat-label">Min Floor</span>
+            <span class="ram-stat-value ${r.minFreq > r.availableFreqs[0] ? '' : 'muted'}">${r.minFreq > 0 ? formatFreqHz(r.minFreq) : '—'}</span>
+          </div>
+        </div>
+
+        <!-- Min Freq Floor Selector -->
+        <div class="config-row">
+          <div><div class="config-label">Min Freq Floor</div></div>
+          <select class="config-input freq-limit-select" id="ram-min-freq"
+                  onchange="window.OC.onRamMinFreqChange(this)">
+            ${freqOptions}
+          </select>
+        </div>
+
+        <!-- Available Frequencies Table -->
+        <div class="opp-table-wrapper">
+          <table class="opp-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Frequency</th>
+                <th>Data Rate</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+    r.availableFreqs.forEach((freq, idx) => {
+      const pct = maxFreqHz > 0 ? (freq / maxFreqHz * 100) : 0;
+      const isCurrent = freq === r.curFreq;
+      const isFloor = freq === r.minFreq;
+      const dataRateMts = Math.round(freq / 1000000);
+      const rowClass = isCurrent ? 'modified ram-row' : '';
+
+      html += `
+              <tr class="${rowClass}">
+                <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
+                <td>
+                  <span class="cell-static">${formatFreqHz(freq)}</span>
+                  <div class="freq-bar" style="margin-top:3px">
+                    <div class="freq-bar-fill ram" style="width:${pct}%"></div>
+                  </div>
+                </td>
+                <td><span class="cell-static">${dataRateMts} MT/s</span></td>
+                <td>
+                  ${isCurrent ? '<span class="info-chip ram">Active</span>' : ''}
+                  ${isFloor ? '<span class="info-chip freq">Floor</span>' : ''}
+                </td>
+              </tr>`;
+    });
+
+    html += `
+            </tbody>
+          </table>
+        </div>
+
+        <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);line-height:1.4">
+          ℹ️ Min Freq Floor locks DRAM at or above the selected frequency.
+          Vcore voltage is automatically managed by DVFSRC and increases with higher DRAM OPPs.
+        </div>
+      </div>`;
+
+    return html;
+  }
+
   /* ─── Render All ──────────────────────────────────────────────────── */
   function renderAll() {
     const cpuContainer = document.getElementById('cpu-clusters');
@@ -461,6 +613,21 @@
           </div>`;
       } else {
         gpuContainer.innerHTML = renderGpuCard();
+      }
+    }
+
+    const ramContainer = document.getElementById('ram-devices');
+    if (ramContainer) {
+      if (state.ram.availableFreqs.length === 0) {
+        ramContainer.innerHTML = `
+          <div class="card">
+            <div class="empty-state">
+              <div class="icon">🧠</div>
+              <p>No RAM data loaded.<br>Tap "Reload" to read DRAM info.</p>
+            </div>
+          </div>`;
+      } else {
+        ramContainer.innerHTML = renderRamCard();
       }
     }
   }
@@ -529,9 +696,40 @@
     state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
     state.originalGpu = JSON.parse(JSON.stringify(state.gpuEntries));
 
+    // --- RAM Data ---
+    const ramAvailRes = await exec(`cat ${DRAM_DEVFREQ}/available_frequencies 2>/dev/null`);
+    const ramFreqs = ramAvailRes.stdout.trim()
+      ? ramAvailRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f) && f > 0).sort((a, b) => a - b)
+      : [];
+
+    const ramCurRes = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
+    const ramMinRes = await exec(`cat ${DRAM_DEVFREQ}/min_freq 2>/dev/null`);
+    const ramMaxRes = await exec(`cat ${DRAM_DEVFREQ}/max_freq 2>/dev/null`);
+    const ramGovRes = await exec(`cat ${DRAM_DEVFREQ}/governor 2>/dev/null`);
+    const ramRateRes = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
+    const ramTypeRes = await exec(`cat ${DRAM_TYPE_PATH} 2>/dev/null`);
+    const vcoreRes = await exec(`cat ${VCORE_UV_PATH} 2>/dev/null`);
+
+    const rateMatch = ramRateRes.stdout.match(/(\d+)/);
+    const typeMatch = ramTypeRes.stdout.match(/(\d+)/);
+    const ramMinHz = parseInt(ramMinRes.stdout.trim(), 10) || 0;
+
+    state.ram = {
+      dataRate: rateMatch ? parseInt(rateMatch[1], 10) : 0,
+      dramType: typeMatch ? (DRAM_TYPE_MAP[parseInt(typeMatch[1], 10)] || `Type ${typeMatch[1]}`) : '',
+      vcoreUv: parseInt(vcoreRes.stdout.trim(), 10) || 0,
+      curFreq: parseInt(ramCurRes.stdout.trim(), 10) || 0,
+      minFreq: ramMinHz,
+      maxFreq: parseInt(ramMaxRes.stdout.trim(), 10) || 0,
+      availableFreqs: ramFreqs,
+      governor: ramGovRes.stdout.trim(),
+      selectedMinFreq: ramMinHz,
+    };
+    state.originalRamMinFreq = ramMinHz;
+
     renderAll();
     const cpuCount = state.cpuClusters.reduce((s, c) => s + c.entries.length, 0);
-    showToast(`Loaded: CPU ${cpuCount} OPPs, GPU ${state.gpuEntries.length} OPPs`, 'success');
+    showToast(`Loaded: CPU ${cpuCount} OPPs, GPU ${state.gpuEntries.length} OPPs, RAM ${ramFreqs.length} OPPs`, 'success');
   }
 
   function updateModuleStatus() {
@@ -589,6 +787,11 @@
       row.classList.toggle('modified', entry.modified && !entry.isNew);
       if (type === 'GPU') row.classList.toggle('gpu-row', entry.modified);
     }
+  }
+
+  /* ─── RAM Min Freq Change Handler ──────────────────────────────────── */
+  function onRamMinFreqChange(select) {
+    state.ram.selectedMinFreq = parseInt(select.value, 10) || 0;
   }
 
   /* ─── Add / Remove / Restore ──────────────────────────────────────── */
@@ -945,6 +1148,30 @@
       }
     }
 
+    /* --- RAM: set DRAM min_freq floor via devfreq --- */
+    const ramMinTarget = state.ram.selectedMinFreq;
+    if (ramMinTarget > 0 && ramMinTarget !== state.originalRamMinFreq) {
+      /* Use tee because shell redirect can fail in some su contexts */
+      const ramRes = await exec(`echo ${ramMinTarget} | tee ${DRAM_DEVFREQ}/min_freq`);
+      if (ramRes.errno === 0) {
+        state.ram.minFreq = ramMinTarget;
+        state.originalRamMinFreq = ramMinTarget;
+        /* Re-read cur_freq and vcore after change */
+        const newCur = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
+        const newVcore = await exec(`cat ${VCORE_UV_PATH} 2>/dev/null`);
+        const newRate = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
+        state.ram.curFreq = parseInt(newCur.stdout.trim(), 10) || state.ram.curFreq;
+        state.ram.vcoreUv = parseInt(newVcore.stdout.trim(), 10) || state.ram.vcoreUv;
+        const rateMatch = newRate.stdout.match(/(\d+)/);
+        if (rateMatch) state.ram.dataRate = parseInt(rateMatch[1], 10);
+        showToast(`DRAM min floor → ${formatFreqHz(ramMinTarget)}`, 'success');
+        renderAll();
+      } else {
+        showToast(`DRAM min_freq write failed: ${ramRes.stderr}`, 'error');
+      }
+      anyOcApplied = true;
+    }
+
     await saveConfig();
 
     /* Read back results from kernel module for user feedback */
@@ -983,7 +1210,7 @@
 
     /* Flat config — easy to parse from shell without jq */
     const config = {
-      version: 4,
+      version: 5,
       cpu_oc_l_freq:  oc[0] || 0,
       cpu_oc_l_volt:  oc[1] || 0,
       cpu_oc_b_freq:  oc[2] || 0,
@@ -1001,6 +1228,10 @@
       config[`cpu_max_${cluster.id}`] = parseInt(cluster.curMax, 10) || 0;
       config[`cpu_min_${cluster.id}`] = parseInt(cluster.curMin, 10) || 0;
     }
+
+    /* Add DRAM min freq floor */
+    config.dram_min_freq = state.ram.selectedMinFreq || 0;
+
     config.saved_at = new Date().toISOString();
 
     const json = JSON.stringify(config);
@@ -1010,6 +1241,7 @@
   /* ─── Public API ──────────────────────────────────────────────────── */
   window.OC = {
     onCellChange,
+    onRamMinFreqChange,
     toggleAddForm,
     confirmAddEntry,
     removeRow,

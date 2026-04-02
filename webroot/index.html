@@ -29,6 +29,9 @@
     <button class="tab-btn" data-tab="gpu" id="tab-btn-gpu">
       <span class="tab-icon">🎮</span> GPU
     </button>
+    <button class="tab-btn" data-tab="ram" id="tab-btn-ram">
+      <span class="tab-icon">🧠</span> RAM
+    </button>
   </nav>
 
   <!-- ═══ CPU Tab ═══ -->
@@ -77,6 +80,32 @@
         🔄 Reload
       </button>
       <button class="btn btn-primary gpu-accent btn-full" onclick="window.OC.applyAll()" id="btn-gpu-apply" style="flex:2">
+        🚀 Apply Changes
+      </button>
+    </div>
+
+  </section>
+
+  <!-- ═══ RAM Tab ═══ -->
+  <section class="tab-content" data-tab="ram">
+
+    <!-- RAM Info & OPP Table (dynamically populated) -->
+    <div id="ram-devices">
+      <div class="card">
+        <div class="card-header">
+          <div class="skeleton" style="width:120px;height:18px"></div>
+          <div class="skeleton" style="width:60px;height:18px"></div>
+        </div>
+        <div class="skeleton" style="height:200px;margin-bottom:8px"></div>
+      </div>
+    </div>
+
+    <!-- RAM Action Buttons -->
+    <div class="btn-group" style="margin-bottom:12px">
+      <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-ram-scan" style="flex:1">
+        🔄 Reload
+      </button>
+      <button class="btn btn-primary ram-accent btn-full" onclick="window.OC.applyAll()" id="btn-ram-apply" style="flex:2">
         🚀 Apply Changes
       </button>
     </div>

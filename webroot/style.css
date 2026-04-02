@@ -27,6 +27,9 @@
   --accent-gpu: #f59e0b;
   --accent-gpu-glow: rgba(245, 158, 11, 0.3);
   --accent-gpu-dim: rgba(245, 158, 11, 0.15);
+  --accent-ram: #06b6d4;
+  --accent-ram-glow: rgba(6, 182, 212, 0.3);
+  --accent-ram-dim: rgba(6, 182, 212, 0.15);
   --accent-success: #10b981;
   --accent-success-glow: rgba(16, 185, 129, 0.3);
   --accent-danger: #ef4444;
@@ -232,6 +235,12 @@ body::before {
   box-shadow: 0 2px 12px var(--accent-gpu-glow);
 }
 
+.tab-btn.active[data-tab="ram"] {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(6, 182, 212, 0.08));
+  color: var(--accent-ram);
+  box-shadow: 0 2px 12px var(--accent-ram-glow);
+}
+
 .tab-icon {
   font-size: 1rem;
 }
@@ -311,6 +320,11 @@ body::before {
   color: var(--accent-gpu);
 }
 
+.card-badge.ram {
+  background: var(--accent-ram-dim);
+  color: var(--accent-ram);
+}
+
 /* ─── OPP Table ─────────────────────────────────────────────────────── */
 .opp-table-wrapper {
   overflow-x: auto;
@@ -370,6 +384,11 @@ body::before {
   border-left: 2px solid var(--accent-gpu);
 }
 
+.opp-table tbody tr.modified.ram-row {
+  background: rgba(6, 182, 212, 0.06);
+  border-left: 2px solid var(--accent-ram);
+}
+
 .opp-table tbody tr.new-entry {
   background: rgba(16, 185, 129, 0.06);
   border-left: 2px solid var(--accent-success);
@@ -405,6 +424,11 @@ body::before {
 .tab-content[data-tab="gpu"] .cell-input:focus {
   border-color: var(--accent-gpu);
   box-shadow: 0 0 0 2px var(--accent-gpu-glow);
+}
+
+.tab-content[data-tab="ram"] .cell-input:focus {
+  border-color: var(--accent-ram);
+  box-shadow: 0 0 0 2px var(--accent-ram-glow);
 }
 
 .cell-input.modified {
@@ -506,6 +530,15 @@ body::before {
 
 .btn-primary.gpu-accent:hover {
   box-shadow: 0 6px 24px var(--accent-gpu-glow);
+}
+
+.btn-primary.ram-accent {
+  background: linear-gradient(135deg, var(--accent-ram), #22d3ee);
+  box-shadow: 0 4px 16px var(--accent-ram-glow);
+}
+
+.btn-primary.ram-accent:hover {
+  box-shadow: 0 6px 24px var(--accent-ram-glow);
 }
 
 .btn-secondary {
@@ -711,6 +744,10 @@ body::before {
   background: linear-gradient(90deg, var(--accent-gpu), #fbbf24);
 }
 
+.freq-bar-fill.ram {
+  background: linear-gradient(90deg, var(--accent-ram), #22d3ee);
+}
+
 /* ─── Responsive ────────────────────────────────────────────────────── */
 @media (max-width: 380px) {
   .app-container {
@@ -805,6 +842,49 @@ body::before {
 .info-chip.volt {
   background: rgba(245, 158, 11, 0.1);
   color: var(--accent-gpu);
+}
+
+.info-chip.ram {
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--accent-ram);
+}
+
+/* ─── RAM Status Grid ───────────────────────────────────────────────── */
+.ram-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ram-stat-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ram-stat-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ram-stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent-ram);
+}
+
+.ram-stat-value.muted {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
 }
 
 /* ─── Cluster Divider ───────────────────────────────────────────────── */

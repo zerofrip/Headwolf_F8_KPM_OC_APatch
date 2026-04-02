@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (service.sh v7.3) providing CPU, GPU, and DRAM overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -12,24 +12,25 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
-- **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, one-tap apply
-- **Configuration Persistence** — OC params and scaling limits saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
+- **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
+- **WebUI** — Browser-based interface for CPU/GPU/RAM OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, one-tap apply
+- **Configuration Persistence** — OC params, scaling limits, and DRAM min freq saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```text
 ├── module.prop                     # APatch module metadata
 ├── kpm_oc.ko                       # Compiled kernel module (v7.2)
-├── service.sh                      # Boot-time service (v7.2)
+├── service.sh                      # Boot-time service (v7.3)
 └── webroot/
-    ├── index.html                  # WebUI shell (CPU/GPU tabs)
-    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs)
+    ├── index.html                  # WebUI shell (CPU/GPU/RAM tabs)
+    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq)
     └── style.css                    # Dark glassmorphism design system
 ```
 
 ## Boot Flow (`service.sh`)
 
-1. Parse `oc_config.json` for saved OC params (CPU + GPU) and build `insmod` parameter string
+1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM) and build `insmod` parameter string
 2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
@@ -37,10 +38,11 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 3. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
 4. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
 5. Log CPU/GPU OC results
-6. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
-7. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
-8. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
-9. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC and restores `scaling_max_freq` after vendor services (powerhal, fpsgo, thermal_engine) have fully initialized and may have issued stock-capped freq constraints
+6. Restore DRAM min freq floor via DVFSRC devfreq (`/sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq`)
+7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+10. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC, restores `scaling_max_freq`, and re-sets DRAM min freq floor after vendor services have fully initialized
 
 ### Config Persistence
 
@@ -50,14 +52,15 @@ subsequent module updates preserve the user's customized values.
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "cpu_oc_l_freq": 3800000, "cpu_oc_l_volt": 1050000,
   "cpu_oc_b_freq": 3800000, "cpu_oc_b_volt": 1100000,
   "cpu_oc_p_freq": 3800000, "cpu_oc_p_volt": 1150000,
   "gpu_oc_freq": 3000000,   "gpu_oc_volt": 105000, "gpu_oc_vsram": 95000,
   "cpu_max_0": 3800000, "cpu_min_0": 480000,
   "cpu_max_4": 3800000, "cpu_min_4": 400000,
-  "cpu_max_7": 3800000, "cpu_min_7": 400000
+  "cpu_max_7": 3800000, "cpu_min_7": 400000,
+  "dram_min_freq": 6400000000
 }
 ```
 
@@ -157,6 +160,49 @@ echo clear > /sys/module/kpm_oc/parameters/gpu_volt_override
 cat /proc/gpufreqv2/gpu_working_opp_table | head -5
 ```
 
+## DRAM Overclocking
+
+DRAM frequency is controlled via the standard Linux devfreq interface exposed by `mtk-dvfsrc-devfreq`. No kernel module changes are required — sysfs writes are sufficient.
+
+- **DRAM type**: LPDDR5X (Micron, 4 channels)
+- **Devfreq path**: `/sys/class/devfreq/mtk-dvfsrc-devfreq/`
+- **Governor**: `userspace` (supports `set_freq`, `min_freq`, `max_freq`)
+- **Vcore**: Auto-managed by DVFSRC regulator; scales automatically with DRAM OPP level (read-only via `/sys/class/regulator/regulator.74/microvolts`)
+
+### Available DRAM OPPs
+
+| Data Rate (MHz) | devfreq freq (Hz) |
+|------------------|--------------------|
+| 800              | 800000000          |
+| 1600             | 1600000000         |
+| 1866             | 1866000000         |
+| 2133             | 2133000000         |
+| 3094             | 3094000000         |
+| 4100             | 4100000000         |
+| 5500             | 5500000000         |
+| 6400             | 6400000000         |
+
+### Usage
+
+```sh
+# Set min frequency floor to 6400 MHz (lock DRAM at max OPP)
+echo 6400000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
+
+# Read current frequency
+cat /sys/class/devfreq/mtk-dvfsrc-devfreq/cur_freq
+
+# Verify actual data rate
+cat /sys/bus/platform/drivers/dramc_drv/dram_data_rate
+
+# Read current Vcore voltage (µV)
+cat /sys/class/regulator/regulator.74/microvolts
+
+# Reset to default (allow DVFSRC to scale freely)
+echo 800000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
+```
+
+> **Note**: Shell redirect (`>`) does not work under APatch su context for devfreq sysfs; use `tee` instead.
+
 ## Control Interfaces
 
 | Action | Interface |
@@ -169,6 +215,8 @@ cat /proc/gpufreqv2/gpu_working_opp_table | head -5
 | CPU max freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_max_freq` |
 | CPU min freq | `echo <khz> > /sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_min_freq` |
 | GPU fixed OPP index | `echo <idx> > /proc/gpufreqv2/fix_target_opp_index` |
+| DRAM min freq floor | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq` |
+| DRAM max freq ceil  | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/max_freq` |
 
 ## Data Sources
 
@@ -180,6 +228,11 @@ cat /proc/gpufreqv2/gpu_working_opp_table | head -5
 | GPU status | `/proc/gpufreqv2/gpufreq_status` |
 | CPU volt override result | `kpm_oc.ko` → `cpu_volt_ov_result` sysfs |
 | GPU volt override result | `kpm_oc.ko` → `gpu_volt_ov_result` sysfs |
+| DRAM cur freq | `/sys/class/devfreq/mtk-dvfsrc-devfreq/cur_freq` |
+| DRAM available freqs | `/sys/class/devfreq/mtk-dvfsrc-devfreq/available_frequencies` |
+| DRAM data rate | `/sys/bus/platform/drivers/dramc_drv/dram_data_rate` |
+| DRAM type | `/sys/bus/platform/drivers/dramc_drv/dram_type` |
+| Vcore voltage | `/sys/class/regulator/regulator.74/microvolts` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
 

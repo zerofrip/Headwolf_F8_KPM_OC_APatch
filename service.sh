@@ -1,7 +1,7 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v7.2
+# Headwolf F8 KPM OC Manager - Service Script v7.3
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
-# Restores OC config (CPU/GPU) and scaling limits from saved config
+# Restores OC config (CPU/GPU/DRAM) and scaling limits from saved config
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
 CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -132,6 +132,17 @@ if [ -f "${CONFIG_FILE}" ]; then
     fi
 fi
 
+# ─── Restore DRAM min freq floor from config ─────────────────────────────
+DRAM_DEVFREQ="/sys/class/devfreq/mtk-dvfsrc-devfreq"
+if [ -f "${CONFIG_FILE}" ] && [ -d "${DRAM_DEVFREQ}" ]; then
+    dram_min=$(json_int dram_min_freq)
+    if [ -n "${dram_min}" ] && [ "${dram_min}" -gt 0 ] 2>/dev/null; then
+        echo "${dram_min}" | tee "${DRAM_DEVFREQ}/min_freq" > /dev/null 2>&1
+        cur_dram=$(cat "${DRAM_DEVFREQ}/cur_freq" 2>/dev/null)
+        logi "DRAM min_freq floor set: target=${dram_min} cur=${cur_dram}"
+    fi
+fi
+
 # Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:raw32|...)
 CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
 if [ -z "${CPU_RAW}" ] || [ "${CPU_RAW}" = "READY" ]; then
@@ -188,7 +199,12 @@ fi
             echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
     done
     echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+    # Re-apply DRAM min freq floor (vendor services may have reset it)
+    dram_min=$(json_int dram_min_freq)
+    if [ -n "${dram_min}" ] && [ "${dram_min}" -gt 0 ] 2>/dev/null; then
+        echo "${dram_min}" | tee "${DRAM_DEVFREQ}/min_freq" > /dev/null 2>&1
+    fi
     logi "Late-boot relift completed"
 } &
 
-logi "Service script v7.2 completed. Module loaded."
+logi "Service script v7.3 completed. Module loaded."
