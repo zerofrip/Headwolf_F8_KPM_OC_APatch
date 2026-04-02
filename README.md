@@ -8,7 +8,7 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
 - **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
 - **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `mtk_cpufreq_hw_fast_switch` and `mtk_cpufreq_hw_target_index` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
-- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
+- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; module parameter default is 1450 MHz (overridden by `oc_config.json` on boot)
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
@@ -43,18 +43,20 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 
 ### Config Persistence
 
-The WebUI saves OC settings to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json` as a flat JSON:
+The WebUI saves OC settings to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json` as a flat JSON.
+On first install the bundled `oc_config.default.json` is seeded as the initial config;
+subsequent module updates preserve the user's customized values.
 
 ```json
 {
   "version": 4,
-  "cpu_oc_l_freq": 2400000, "cpu_oc_l_volt": 875000,
-  "cpu_oc_b_freq": 0,       "cpu_oc_b_volt": 0,
-  "cpu_oc_p_freq": 3600000, "cpu_oc_p_volt": 1100000,
-  "gpu_oc_freq": 1500000,   "gpu_oc_volt": 91875, "gpu_oc_vsram": 91875,
-  "cpu_max_0": 2400000, "cpu_min_0": 480000,
-  "cpu_max_4": 3300000, "cpu_min_4": 400000,
-  "cpu_max_7": 3600000, "cpu_min_7": 400000
+  "cpu_oc_l_freq": 3800000, "cpu_oc_l_volt": 1050000,
+  "cpu_oc_b_freq": 3800000, "cpu_oc_b_volt": 1100000,
+  "cpu_oc_p_freq": 3800000, "cpu_oc_p_volt": 1150000,
+  "gpu_oc_freq": 3000000,   "gpu_oc_volt": 105000, "gpu_oc_vsram": 95000,
+  "cpu_max_0": 3800000, "cpu_min_0": 480000,
+  "cpu_max_4": 3800000, "cpu_min_4": 400000,
+  "cpu_max_7": 3800000, "cpu_min_7": 400000
 }
 ```
 
@@ -104,7 +106,7 @@ echo clear > /sys/module/kpm_oc/parameters/cpu_volt_override
 
 ## GPU Overclocking
 
-### Method A — Runtime memory patch (default, no reboot)
+### Runtime memory patch (default, no reboot)
 
 `kpm_oc.ko` patches `g_gpu_default_opp_table[0]` and the working table at runtime.
 A lifetime GPU relift kthread re-runs all GPU patches every 500 ms,
@@ -112,7 +114,7 @@ so GPU power-cycle / runtime table refreshes do not silently drop OC back to sto
 The GPUEB kprobe countermeasure (v7.2) additionally re-patches OPP voltages
 immediately before every GPU DVFS commit, eliminating the window where GPUEB
 could revert the voltage between relift cycles.
-Default target on boot: **1450 MHz @ 87500 (= 875.0 mV)**.
+Default target on boot: **1450 MHz @ 87500 (= 875.0 mV)** (bare module parameter default; `oc_config.json` overrides this on boot).
 
 ```bash
 echo 1467000 > /sys/module/kpm_oc/parameters/gpu_target_freq

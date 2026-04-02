@@ -24,23 +24,6 @@ logi() {
     log -t "KPM_OC" "$1"
 }
 
-is_loaded() {
-    cat /proc/modules 2>/dev/null | grep -q "^$1 "
-}
-
-unload_mod() {
-    mod="$1"
-    if is_loaded "${mod}"; then
-        rmmod "${mod}" 2>/dev/null
-    fi
-}
-
-load_mod() {
-    ko="$1"
-    [ -f "${ko}" ] || return 1
-    insmod "${ko}" 2>/dev/null
-}
-
 resolve_gpu_devfreq_path() {
     for path in /sys/class/devfreq/*mali*; do
         if [ -d "${path}" ]; then
@@ -189,4 +172,4 @@ if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi
 
-logi "Service script v4.0 completed. Module loaded."
+logi "Service script v7.2 completed. Module loaded."
