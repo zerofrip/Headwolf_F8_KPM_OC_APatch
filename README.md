@@ -40,6 +40,7 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 6. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
 7. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
 8. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+9. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC and restores `scaling_max_freq` after vendor services (powerhal, fpsgo, thermal_engine) have fully initialized and may have issued stock-capped freq constraints
 
 ### Config Persistence
 

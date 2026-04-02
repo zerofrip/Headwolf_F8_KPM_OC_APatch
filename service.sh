@@ -172,4 +172,23 @@ if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi
 
+# Late-boot relift (T+45 s): re-apply OC constraints after vendor services
+# (powerhal, fpsgo, thermal_engine) finish initializing and may have issued
+# freq_qos MAX requests capped at the stock max frequency.  This pass also
+# ensures cluster_qos_ptr is populated in the kernel module so the
+# freq_qos_update_request kprobe can start intercepting future stock-cap writes.
+{
+    sleep 45
+    grep -q "^kpm_oc " /proc/modules 2>/dev/null || exit 0
+    echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
+    sleep 1
+    for policy in 0 4 7; do
+        max_val=$(json_int "cpu_max_${policy}")
+        [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null && \
+            echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
+    done
+    echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+    logi "Late-boot relift completed"
+} &
+
 logi "Service script v7.2 completed. Module loaded."
