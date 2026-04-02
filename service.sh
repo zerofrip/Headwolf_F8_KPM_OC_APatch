@@ -1,13 +1,14 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v7.3
+# Headwolf F8 KPM OC Manager - Service Script v7.5
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
-# Restores OC config (CPU/GPU/DRAM) and scaling limits from saved config
+# Restores OC config (CPU/GPU/DRAM/IO/UFS) and scaling limits from saved config
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
 CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
 CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
 GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 CPU_RAW_FILE="${CONFIG_DIR}/cpu_raw_dump"
+UFS_HCI_PATH="/sys/devices/platform/11270000.ufshci"
 
 mkdir -p "${CONFIG_DIR}" 2>/dev/null
 
@@ -38,6 +39,10 @@ resolve_gpu_devfreq_path() {
 # Flat JSON keys: cpu_oc_{l,b,p}_{freq,volt}, gpu_oc_{freq,volt,vsram}
 json_int() {
     grep -o "\"$1\":[0-9]*" "${CONFIG_FILE}" 2>/dev/null | head -1 | grep -o '[0-9]*$'
+}
+
+json_str() {
+    grep -o "\"$1\":\"[^\"]*\"" "${CONFIG_FILE}" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'
 }
 
 INSMOD_PARAMS=""
@@ -205,6 +210,39 @@ fi
         echo "${dram_min}" | tee "${DRAM_DEVFREQ}/min_freq" > /dev/null 2>&1
     fi
     logi "Late-boot relift completed"
+
+    # ─── Restore I/O & UFS settings on all UFS block devices ─────────────
+    io_read_ahead=$(json_int io_read_ahead_kb)
+    io_scheduler=$(json_str io_scheduler)
+    io_nomerges=$(json_int io_nomerges)
+    io_rq_affinity=$(json_int io_rq_affinity)
+    io_iostats=$(json_int io_iostats)
+    io_add_random=$(json_int io_add_random)
+
+    for dev in /sys/block/sd*; do
+        [ -d "${dev}/queue" ] || continue
+        q="${dev}/queue"
+        [ -n "${io_read_ahead}" ] && [ "${io_read_ahead}" -gt 0 ] 2>/dev/null && \
+            echo "${io_read_ahead}" > "${q}/read_ahead_kb" 2>/dev/null
+        [ -n "${io_scheduler}" ] && \
+            echo "${io_scheduler}" > "${q}/scheduler" 2>/dev/null
+        [ -n "${io_nomerges}" ] && \
+            echo "${io_nomerges}" > "${q}/nomerges" 2>/dev/null
+        [ -n "${io_rq_affinity}" ] && \
+            echo "${io_rq_affinity}" > "${q}/rq_affinity" 2>/dev/null
+        [ -n "${io_iostats}" ] && \
+            echo "${io_iostats}" > "${q}/iostats" 2>/dev/null
+        [ -n "${io_add_random}" ] && \
+            echo "${io_add_random}" > "${q}/add_random" 2>/dev/null
+    done
+    logi "I/O tuning applied: ra=${io_read_ahead:-def} sched=${io_scheduler:-def} nom=${io_nomerges:-def} rqa=${io_rq_affinity:-def}"
+
+    # ─── UFS controller (ufshcd) settings ────────────────────────────────
+    if [ -d "${UFS_HCI_PATH}" ]; then
+        ufs_wb=$(json_int ufs_wb_on)
+        [ -n "${ufs_wb}" ] && echo "${ufs_wb}" > "${UFS_HCI_PATH}/wb_on" 2>/dev/null && \
+            logi "UFS Write Booster = ${ufs_wb}"
+    fi
 } &
 
-logi "Service script v7.3 completed. Module loaded."
+logi "Service script v7.4 completed. Module loaded."

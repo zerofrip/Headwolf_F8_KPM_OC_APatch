@@ -15,7 +15,7 @@
   <header class="header">
     <div class="header-icon">⚡</div>
     <h1>OC Manager</h1>
-    <p class="subtitle">Headwolf F8 · Dimensity 8300 · v7.3</p>
+    <p class="subtitle">Headwolf F8 · Dimensity 8300 · v7.5</p>
     <div id="module-status" class="status-badge offline">
       <span class="status-dot"></span> Checking...
     </div>
@@ -31,6 +31,9 @@
     </button>
     <button class="tab-btn" data-tab="ram" id="tab-btn-ram">
       <span class="tab-icon">🧠</span> RAM
+    </button>
+    <button class="tab-btn" data-tab="storage" id="tab-btn-storage">
+      <span class="tab-icon">💾</span> Storage
     </button>
   </nav>
 
@@ -106,6 +109,32 @@
         🔄 Reload
       </button>
       <button class="btn btn-primary ram-accent btn-full" onclick="window.OC.applyAll()" id="btn-ram-apply" style="flex:2">
+        🚀 Apply Changes
+      </button>
+    </div>
+
+  </section>
+
+  <!-- ═══ Storage Tab ═══ -->
+  <section class="tab-content" data-tab="storage">
+
+    <!-- Storage Devices (dynamically populated) -->
+    <div id="storage-devices">
+      <div class="card">
+        <div class="card-header">
+          <div class="skeleton" style="width:120px;height:18px"></div>
+          <div class="skeleton" style="width:60px;height:18px"></div>
+        </div>
+        <div class="skeleton" style="height:160px;margin-bottom:8px"></div>
+      </div>
+    </div>
+
+    <!-- Storage Action Buttons -->
+    <div class="btn-group" style="margin-bottom:12px">
+      <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-storage-scan" style="flex:1">
+        🔄 Reload
+      </button>
+      <button class="btn btn-primary storage-accent btn-full" onclick="window.OC.applyAll()" id="btn-storage-apply" style="flex:2">
         🚀 Apply Changes
       </button>
     </div>

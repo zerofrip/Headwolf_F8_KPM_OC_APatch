@@ -30,6 +30,9 @@
   --accent-ram: #06b6d4;
   --accent-ram-glow: rgba(6, 182, 212, 0.3);
   --accent-ram-dim: rgba(6, 182, 212, 0.15);
+  --accent-storage: #10b981;
+  --accent-storage-glow: rgba(16, 185, 129, 0.3);
+  --accent-storage-dim: rgba(16, 185, 129, 0.15);
   --accent-success: #10b981;
   --accent-success-glow: rgba(16, 185, 129, 0.3);
   --accent-danger: #ef4444;
@@ -241,6 +244,12 @@ body::before {
   box-shadow: 0 2px 12px var(--accent-ram-glow);
 }
 
+.tab-btn.active[data-tab="storage"] {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.08));
+  color: var(--accent-storage);
+  box-shadow: 0 2px 12px var(--accent-storage-glow);
+}
+
 .tab-icon {
   font-size: 1rem;
 }
@@ -323,6 +332,11 @@ body::before {
 .card-badge.ram {
   background: var(--accent-ram-dim);
   color: var(--accent-ram);
+}
+
+.card-badge.storage {
+  background: var(--accent-storage-dim);
+  color: var(--accent-storage);
 }
 
 /* ─── OPP Table ─────────────────────────────────────────────────────── */
@@ -539,6 +553,15 @@ body::before {
 
 .btn-primary.ram-accent:hover {
   box-shadow: 0 6px 24px var(--accent-ram-glow);
+}
+
+.btn-primary.storage-accent {
+  background: linear-gradient(135deg, var(--accent-storage), #34d399);
+  box-shadow: 0 4px 16px var(--accent-storage-glow);
+}
+
+.btn-primary.storage-accent:hover {
+  box-shadow: 0 6px 24px var(--accent-storage-glow);
 }
 
 .btn-secondary {
@@ -849,6 +872,11 @@ body::before {
   color: var(--accent-ram);
 }
 
+.info-chip.storage {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--accent-storage);
+}
+
 /* ─── RAM Status Grid ───────────────────────────────────────────────── */
 .ram-status-grid {
   display: grid;
@@ -887,9 +915,125 @@ body::before {
   font-size: 0.82rem;
 }
 
+/* ─── Storage Status Grid ───────────────────────────────────────────── */
+.storage-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.storage-stat-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.storage-stat-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.storage-stat-value {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent-storage);
+}
+
+.storage-stat-value.muted {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 /* ─── Cluster Divider ───────────────────────────────────────────────── */
 .cluster-divider {
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--glass-border), transparent);
   margin: 8px 0;
+}
+
+/* ─── Toggle Switch ─────────────────────────────────────────────────── */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--glass-border);
+  border-radius: 24px;
+  transition: all 0.25s ease;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: all 0.25s ease;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--accent-storage-dim);
+  border-color: var(--accent-storage);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: var(--accent-storage);
+}
+
+/* ─── Storage Section Label ─────────────────────────────────────────── */
+.storage-section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--accent-storage);
+  padding: 10px 12px 4px;
+  border-top: 1px solid var(--glass-border);
+  margin-top: 4px;
+}
+
+/* ─── Config Hint ───────────────────────────────────────────────────── */
+.config-hint {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 1px;
+  line-height: 1.3;
+}
+
+.config-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
 }

@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   KPM OC Manager v7.3 — Application Logic
+   KPM OC Manager v7.5 — Application Logic
    Headwolf F8 · Dimensity 8300 (MT8792 / MT6897)
    CPU: CSRAM LUT via kpm_oc.ko (mtk-cpufreq-hw domains)
    GPU: /proc/gpufreqv2 interface
+   Storage: UFS block queue + ufshcd controller tuning
    ═══════════════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -20,6 +21,20 @@
   const DRAM_DATA_RATE = '/sys/bus/platform/drivers/dramc_drv/dram_data_rate';
   const DRAM_TYPE_PATH = '/sys/bus/platform/drivers/dramc_drv/dram_type';
   const VCORE_UV_PATH = '/sys/class/regulator/regulator.74/microvolts';
+  const IO_BLOCK_DEVS = ['sda', 'sdb', 'sdc'];   // UFS namespaces
+  const IO_READ_AHEAD_OPTIONS = [128, 256, 512, 1024, 2048];
+  const IO_SCHEDULER_OPTIONS = ['none', 'mq-deadline', 'kyber', 'bfq'];
+  const IO_RQ_AFFINITY_OPTIONS = [
+    { value: 0, label: '0 — None' },
+    { value: 1, label: '1 — CPU group' },
+    { value: 2, label: '2 — Same CPU' },
+  ];
+  const IO_NOMERGES_OPTIONS = [
+    { value: 0, label: '0 — Merge all' },
+    { value: 1, label: '1 — No front' },
+    { value: 2, label: '2 — No merge' },
+  ];
+  const UFS_HCI_GLOB = '/sys/devices/platform/11270000.ufshci';  // MT6897 primary UFSHCI
 
   const CPU_POLICIES = [0, 4, 7];
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
@@ -45,6 +60,20 @@
       selectedMinFreq: 0,   // user selection (Hz)
     },
     originalRamMinFreq: 0,
+    storage: {
+      devices: [],       // [{ name, scheduler, readAheadKb, nrRequests, nomerges, rqAffinity, iostats, addRandom }]
+      readAheadKb: 2048, // user-selected value (applied to all devices)
+      scheduler: 'none', // user-selected scheduler
+      nomerges: 0,       // 0=merge, 1=no front, 2=no merge
+      rqAffinity: 2,     // 0=none, 1=group, 2=same CPU
+      iostats: 1,        // 0=off, 1=on
+      addRandom: 0,      // 0=off, 1=on
+      // UFS controller (ufshcd)
+      wbOn: -1,          // Write Booster (-1=unknown, 0=off, 1=on)
+      clkgateEnable: -1, // Clock gating (-1=unknown, 0=off, 1=on)
+      clkgateDelay: 0,   // Clock gating delay (ms)
+      ufsHciPath: '',    // resolved ufshci sysfs path
+    },
   };
 
   /* ─── Shell Command Execution ─────────────────────────────────────── */
@@ -129,6 +158,41 @@
     }
     if (cmd.includes('regulator.74/microvolts')) {
       return { errno: 0, stdout: '725000', stderr: '' };
+    }
+    /* Mock: block queue attributes */
+    if (cmd.includes('/queue/scheduler')) {
+      return { errno: 0, stdout: '[none] mq-deadline kyber bfq', stderr: '' };
+    }
+    if (cmd.includes('/queue/nomerges')) {
+      return { errno: 0, stdout: '0', stderr: '' };
+    }
+    if (cmd.includes('/queue/rq_affinity')) {
+      return { errno: 0, stdout: '2', stderr: '' };
+    }
+    if (cmd.includes('/queue/iostats')) {
+      return { errno: 0, stdout: '1', stderr: '' };
+    }
+    if (cmd.includes('/queue/add_random')) {
+      return { errno: 0, stdout: '0', stderr: '' };
+    }
+    if (cmd.includes('/queue/read_ahead_kb')) {
+      return { errno: 0, stdout: '2048', stderr: '' };
+    }
+    if (cmd.includes('/queue/nr_requests')) {
+      return { errno: 0, stdout: '63', stderr: '' };
+    }
+    /* Mock: UFS HCI attributes */
+    if (cmd.includes('wb_on')) {
+      return { errno: 0, stdout: '1', stderr: '' };
+    }
+    if (cmd.includes('clkgate_enable')) {
+      return { errno: 0, stdout: '1', stderr: '' };
+    }
+    if (cmd.includes('clkgate_delay')) {
+      return { errno: 0, stdout: '150', stderr: '' };
+    }
+    if (cmd.includes('11270000.ufshci')) {
+      return { errno: 0, stdout: '/sys/devices/platform/11270000.ufshci', stderr: '' };
     }
     return { errno: 0, stdout: '', stderr: '' };
   }
@@ -578,6 +642,226 @@
     return html;
   }
 
+  /* ─── Render Storage Card ─────────────────────────────────────────── */
+  function renderStorageCard() {
+    const s = state.storage;
+    if (s.devices.length === 0) return '';
+
+    const rep = s.devices[0]; // representative device for status grid
+
+    /* Scheduler select — built from kernel-reported available schedulers */
+    const schedOptions = (rep.availableSchedulers || IO_SCHEDULER_OPTIONS).map(v =>
+      `<option value="${v}" ${v === s.scheduler ? 'selected' : ''}>${v}</option>`
+    ).join('');
+
+    /* Read-ahead select */
+    const readAheadOptions = IO_READ_AHEAD_OPTIONS.map(v =>
+      `<option value="${v}" ${v === s.readAheadKb ? 'selected' : ''}>${v} KB</option>`
+    ).join('');
+
+    /* rq_affinity select */
+    const rqaOptions = IO_RQ_AFFINITY_OPTIONS.map(o =>
+      `<option value="${o.value}" ${o.value === s.rqAffinity ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    /* nomerges select */
+    const nomOptions = IO_NOMERGES_OPTIONS.map(o =>
+      `<option value="${o.value}" ${o.value === s.nomerges ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    let html = `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">💾</span>
+            UFS · Block Devices
+          </div>
+          <span class="card-badge storage">${s.devices.length} devs</span>
+        </div>
+
+        <!-- Status Grid -->
+        <div class="storage-status-grid">
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">Scheduler</span>
+            <span class="storage-stat-value">${rep ? rep.scheduler || '—' : '—'}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">Queue Depth</span>
+            <span class="storage-stat-value muted">${rep ? (rep.nrRequests > 0 ? rep.nrRequests : '—') : '—'}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">Read-Ahead</span>
+            <span class="storage-stat-value">${s.devices.map(d => d.readAheadKb + ' KB').join(' / ')}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">UFS Type</span>
+            <span class="storage-stat-value muted">UFS 3.1</span>
+          </div>
+        </div>
+
+        <div class="storage-section-label">Block Queue Tuning</div>
+
+        <!-- Scheduler Selector -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">I/O Scheduler</div>
+            <div class="config-hint">Requires elevator; <code>none</code> = HW dispatch (default)</div>
+          </div>
+          <select class="config-input freq-limit-select" id="storage-scheduler"
+                  onchange="window.OC.onStorageSchedulerChange(this)">
+            ${schedOptions}
+          </select>
+        </div>
+
+        <!-- Read-Ahead Selector -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">Read-Ahead (all devs)</div>
+            <div class="config-hint">Sequential pre-fetch buffer. ↑ seq read, ↓ random I/O</div>
+          </div>
+          <select class="config-input freq-limit-select" id="storage-read-ahead"
+                  onchange="window.OC.onStorageReadAheadChange(this)">
+            ${readAheadOptions}
+          </select>
+        </div>
+
+        <!-- rq_affinity Selector -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">RQ Affinity</div>
+            <div class="config-hint">Completion CPU affinity. 2 = force same CPU (lowest latency)</div>
+          </div>
+          <select class="config-input freq-limit-select" id="storage-rq-affinity"
+                  onchange="window.OC.onStorageFieldChange('rqAffinity', this)">
+            ${rqaOptions}
+          </select>
+        </div>
+
+        <!-- nomerges Selector -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">I/O Merges</div>
+            <div class="config-hint">Merge adjacent I/O requests. 0 = merge (best throughput)</div>
+          </div>
+          <select class="config-input freq-limit-select" id="storage-nomerges"
+                  onchange="window.OC.onStorageFieldChange('nomerges', this)">
+            ${nomOptions}
+          </select>
+        </div>
+
+        <!-- Toggle row: iostats + add_random -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">I/O Stats</div>
+            <div class="config-hint">Collect /proc/diskstats. Off = less overhead</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="storage-iostats" ${s.iostats ? 'checked' : ''}
+                   onchange="window.OC.onStorageToggle('iostats', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="config-row">
+          <div>
+            <div class="config-label">Entropy Feed</div>
+            <div class="config-hint">Feed disk timings to /dev/random. Off = less overhead</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="storage-add-random" ${s.addRandom ? 'checked' : ''}
+                   onchange="window.OC.onStorageToggle('addRandom', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Per-device table -->
+        <div class="opp-table-wrapper">
+          <table class="opp-table">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Sched</th>
+                <th>RA</th>
+                <th>Queue</th>
+                <th>Merge</th>
+                <th>Affin</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+    for (const dev of s.devices) {
+      html += `
+              <tr>
+                <td><span class="cell-static" style="font-family:var(--font-mono)">${dev.name}</span></td>
+                <td><span class="info-chip storage">${dev.scheduler || '—'}</span></td>
+                <td><span class="cell-static">${dev.readAheadKb > 0 ? dev.readAheadKb + 'K' : '—'}</span></td>
+                <td><span class="cell-static" style="color:var(--text-muted)">${dev.nrRequests > 0 ? dev.nrRequests : '—'}</span></td>
+                <td><span class="cell-static" style="color:var(--text-muted)">${dev.nomerges}</span></td>
+                <td><span class="cell-static" style="color:var(--text-muted)">${dev.rqAffinity}</span></td>
+              </tr>`;
+    }
+
+    html += `
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    /* ─── UFS Controller Card ──────────────────────────────────────────── */
+    html += `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🔧</span>
+            UFS Controller · ufshcd
+          </div>
+          <span class="card-badge storage">11270000</span>
+        </div>
+
+        <div class="storage-status-grid">
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">Write Booster</span>
+            <span class="storage-stat-value${s.wbOn === 1 ? '' : ' muted'}">${s.wbOn === -1 ? 'N/A' : (s.wbOn ? 'ON' : 'OFF')}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">Clock Gating</span>
+            <span class="storage-stat-value muted">${s.clkgateEnable === -1 ? 'N/A' : (s.clkgateEnable ? 'ON' : 'OFF')}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">CLK Gate Delay</span>
+            <span class="storage-stat-value muted">${s.clkgateDelay > 0 ? s.clkgateDelay + ' ms' : '—'}</span>
+          </div>
+          <div class="storage-stat-item">
+            <span class="storage-stat-label">HCI Address</span>
+            <span class="storage-stat-value muted" style="font-size:0.72rem">0x11270000</span>
+          </div>
+        </div>`;
+
+    if (s.wbOn !== -1) {
+      html += `
+        <div class="config-row">
+          <div>
+            <div class="config-label">Write Booster</div>
+            <div class="config-hint">UFS WB — accelerates burst writes using SLC cache</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="storage-wb-on" ${s.wbOn ? 'checked' : ''}
+                   onchange="window.OC.onStorageToggle('wbOn', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>`;
+    }
+
+    html += `
+        <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);line-height:1.4">
+          ℹ️ Block queue attrs from kernel ELF analysis (42 attrs, 16 writable).
+          <strong style="color:var(--text-secondary)">nr_requests</strong> requires an active elevator (returns EINVAL with <code>none</code>).
+          Scheduler switch may require kernel support.
+        </div>
+      </div>`;
+
+    return html;
+  }
+
   /* ─── Render All ──────────────────────────────────────────────────── */
   function renderAll() {
     const cpuContainer = document.getElementById('cpu-clusters');
@@ -628,6 +912,21 @@
           </div>`;
       } else {
         ramContainer.innerHTML = renderRamCard();
+      }
+    }
+
+    const storageContainer = document.getElementById('storage-devices');
+    if (storageContainer) {
+      if (state.storage.devices.length === 0) {
+        storageContainer.innerHTML = `
+          <div class="card">
+            <div class="empty-state">
+              <div class="icon">💾</div>
+              <p>No storage data loaded.<br>Tap "Reload" to read block device info.</p>
+            </div>
+          </div>`;
+      } else {
+        storageContainer.innerHTML = renderStorageCard();
       }
     }
   }
@@ -732,6 +1031,88 @@
     showToast(`Loaded: CPU ${cpuCount} OPPs, GPU ${state.gpuEntries.length} OPPs, RAM ${ramFreqs.length} OPPs`, 'success');
   }
 
+  /* ─── Storage Data Loading ────────────────────────────────────────── */
+  async function loadStorageData() {
+    const devices = [];
+    for (const dev of IO_BLOCK_DEVS) {
+      const base = `/sys/block/${dev}/queue`;
+      const [schedRes, raRes, nrRes, nomRes, rqaRes, ioRes, arRes] = await Promise.all([
+        exec(`cat ${base}/scheduler 2>/dev/null`),
+        exec(`cat ${base}/read_ahead_kb 2>/dev/null`),
+        exec(`cat ${base}/nr_requests 2>/dev/null`),
+        exec(`cat ${base}/nomerges 2>/dev/null`),
+        exec(`cat ${base}/rq_affinity 2>/dev/null`),
+        exec(`cat ${base}/iostats 2>/dev/null`),
+        exec(`cat ${base}/add_random 2>/dev/null`),
+      ]);
+      if (schedRes.stdout.trim() || raRes.stdout.trim()) {
+        const schedMatch = schedRes.stdout.match(/\[([^\]]+)\]/);
+        const schedAll = schedRes.stdout.trim().replace(/[\[\]]/g, '').split(/\s+/).filter(Boolean);
+        devices.push({
+          name: dev,
+          scheduler: schedMatch ? schedMatch[1] : (schedRes.stdout.trim() || '—'),
+          availableSchedulers: schedAll.length > 0 ? schedAll : IO_SCHEDULER_OPTIONS,
+          readAheadKb: parseInt(raRes.stdout.trim(), 10) || 0,
+          nrRequests: parseInt(nrRes.stdout.trim(), 10) || 0,
+          nomerges: parseInt(nomRes.stdout.trim(), 10) || 0,
+          rqAffinity: parseInt(rqaRes.stdout.trim(), 10) || 0,
+          iostats: parseInt(ioRes.stdout.trim(), 10) || 0,
+          addRandom: parseInt(arRes.stdout.trim(), 10) || 0,
+        });
+      }
+    }
+
+    /* Read UFS HCI path and controller attributes */
+    const hciRes = await exec(`ls -d ${UFS_HCI_GLOB} 2>/dev/null | head -1`);
+    const hciPath = hciRes.stdout.trim();
+    if (hciPath) {
+      state.storage.ufsHciPath = hciPath;
+      const [wbRes, cgEnRes, cgDelRes] = await Promise.all([
+        exec(`cat ${hciPath}/wb_on 2>/dev/null`),
+        exec(`cat ${hciPath}/clkgate_enable 2>/dev/null`),
+        exec(`cat ${hciPath}/clkgate_delay_ms 2>/dev/null || cat ${hciPath}/clkgate_delay 2>/dev/null`),
+      ]);
+      const wbVal = parseInt(wbRes.stdout.trim(), 10);
+      const cgVal = parseInt(cgEnRes.stdout.trim(), 10);
+      const cgDel = parseInt(cgDelRes.stdout.trim(), 10);
+      state.storage.wbOn = isNaN(wbVal) ? -1 : wbVal;
+      state.storage.clkgateEnable = isNaN(cgVal) ? -1 : cgVal;
+      state.storage.clkgateDelay = isNaN(cgDel) ? 0 : cgDel;
+    }
+
+    /* Use config values for user-selected fields; fall back to first device's current value */
+    const cfgRes = await exec(`cat ${CONFIG_FILE} 2>/dev/null`);
+    if (cfgRes.stdout) {
+      const cfg = cfgRes.stdout;
+      const raM = cfg.match(/"io_read_ahead_kb":([0-9]+)/);
+      if (raM) state.storage.readAheadKb = parseInt(raM[1], 10);
+      const schedM = cfg.match(/"io_scheduler":"([^"]+)"/);
+      if (schedM) state.storage.scheduler = schedM[1];
+      const nomM = cfg.match(/"io_nomerges":([0-9]+)/);
+      if (nomM) state.storage.nomerges = parseInt(nomM[1], 10);
+      const rqaM = cfg.match(/"io_rq_affinity":([0-9]+)/);
+      if (rqaM) state.storage.rqAffinity = parseInt(rqaM[1], 10);
+      const ioM = cfg.match(/"io_iostats":([0-9]+)/);
+      if (ioM) state.storage.iostats = parseInt(ioM[1], 10);
+      const arM = cfg.match(/"io_add_random":([0-9]+)/);
+      if (arM) state.storage.addRandom = parseInt(arM[1], 10);
+      const wbM = cfg.match(/"ufs_wb_on":([0-9]+)/);
+      if (wbM) state.storage.wbOn = parseInt(wbM[1], 10);
+    }
+
+    /* If no config value, inherit from first device */
+    if (devices.length > 0) {
+      const d0 = devices[0];
+      if (!state.storage.readAheadKb) state.storage.readAheadKb = d0.readAheadKb || 2048;
+      if (!state.storage.scheduler || state.storage.scheduler === 'none') state.storage.scheduler = d0.scheduler || 'none';
+      if (state.storage.nomerges === undefined) state.storage.nomerges = d0.nomerges;
+      if (state.storage.rqAffinity === undefined) state.storage.rqAffinity = d0.rqAffinity;
+      if (state.storage.iostats === undefined) state.storage.iostats = d0.iostats;
+      if (state.storage.addRandom === undefined) state.storage.addRandom = d0.addRandom;
+    }
+    state.storage.devices = devices;
+  }
+
   function updateModuleStatus() {
     const badge = document.getElementById('module-status');
     if (!badge) return;
@@ -754,6 +1135,8 @@
       await new Promise(r => setTimeout(r, 500));
     }
     await loadData();
+    await loadStorageData();
+    renderAll();
   }
 
   /* ─── Cell Change Handler ─────────────────────────────────────────── */
@@ -787,6 +1170,23 @@
       row.classList.toggle('modified', entry.modified && !entry.isNew);
       if (type === 'GPU') row.classList.toggle('gpu-row', entry.modified);
     }
+  }
+
+  /* ─── Storage Change Handlers ────────────────────────────────────── */
+  function onStorageReadAheadChange(select) {
+    state.storage.readAheadKb = parseInt(select.value, 10) || 2048;
+  }
+
+  function onStorageSchedulerChange(select) {
+    state.storage.scheduler = select.value || 'none';
+  }
+
+  function onStorageFieldChange(field, select) {
+    state.storage[field] = parseInt(select.value, 10) || 0;
+  }
+
+  function onStorageToggle(field, checked) {
+    state.storage[field] = checked ? 1 : 0;
   }
 
   /* ─── RAM Min Freq Change Handler ──────────────────────────────────── */
@@ -1174,6 +1574,66 @@
 
     await saveConfig();
 
+    /* --- Storage: apply all block queue + UFS controller settings --- */
+    const sto = state.storage;
+    if (sto.devices.length > 0) {
+      const results = [];
+
+      for (const dev of sto.devices) {
+        const base = `/sys/block/${dev.name}/queue`;
+
+        /* Read-Ahead */
+        if (sto.readAheadKb > 0 && dev.readAheadKb !== sto.readAheadKb) {
+          const r = await exec(`echo ${sto.readAheadKb} > ${base}/read_ahead_kb 2>&1; echo $?`);
+          if (r.stdout.trim().endsWith('0') || r.errno === 0) {
+            dev.readAheadKb = sto.readAheadKb;
+          }
+        }
+
+        /* Scheduler — write only if user selected a different one */
+        if (sto.scheduler && dev.scheduler !== sto.scheduler) {
+          const r = await exec(`echo ${sto.scheduler} > ${base}/scheduler 2>&1`);
+          if (r.errno === 0 && !r.stderr.trim()) {
+            dev.scheduler = sto.scheduler;
+          } else {
+            results.push(`sched:${r.stderr.trim().substring(0, 40)}`);
+          }
+        }
+
+        /* nomerges */
+        if (dev.nomerges !== sto.nomerges) {
+          await exec(`echo ${sto.nomerges} > ${base}/nomerges 2>/dev/null`);
+          dev.nomerges = sto.nomerges;
+        }
+
+        /* rq_affinity */
+        if (dev.rqAffinity !== sto.rqAffinity) {
+          await exec(`echo ${sto.rqAffinity} > ${base}/rq_affinity 2>/dev/null`);
+          dev.rqAffinity = sto.rqAffinity;
+        }
+
+        /* iostats */
+        if (dev.iostats !== sto.iostats) {
+          await exec(`echo ${sto.iostats} > ${base}/iostats 2>/dev/null`);
+          dev.iostats = sto.iostats;
+        }
+
+        /* add_random */
+        if (dev.addRandom !== sto.addRandom) {
+          await exec(`echo ${sto.addRandom} > ${base}/add_random 2>/dev/null`);
+          dev.addRandom = sto.addRandom;
+        }
+      }
+
+      /* UFS Write Booster */
+      if (sto.ufsHciPath && sto.wbOn >= 0) {
+        await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
+      }
+
+      showToast(`Storage: RA=${sto.readAheadKb}K sched=${sto.scheduler} rqa=${sto.rqAffinity} nom=${sto.nomerges}${sto.wbOn >= 0 ? ' WB=' + (sto.wbOn ? 'ON' : 'OFF') : ''}`, 'success');
+      renderAll();
+    }
+
     /* Read back results from kernel module for user feedback */
     if (anyOcApplied) {
       const cpuRes = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
@@ -1210,7 +1670,7 @@
 
     /* Flat config — easy to parse from shell without jq */
     const config = {
-      version: 5,
+      version: 7,
       cpu_oc_l_freq:  oc[0] || 0,
       cpu_oc_l_volt:  oc[1] || 0,
       cpu_oc_b_freq:  oc[2] || 0,
@@ -1232,6 +1692,15 @@
     /* Add DRAM min freq floor */
     config.dram_min_freq = state.ram.selectedMinFreq || 0;
 
+    /* Add storage / I/O settings */
+    config.io_read_ahead_kb = state.storage.readAheadKb || 2048;
+    config.io_scheduler = state.storage.scheduler || 'none';
+    config.io_nomerges = state.storage.nomerges || 0;
+    config.io_rq_affinity = state.storage.rqAffinity ?? 2;
+    config.io_iostats = state.storage.iostats ?? 1;
+    config.io_add_random = state.storage.addRandom || 0;
+    if (state.storage.wbOn >= 0) config.ufs_wb_on = state.storage.wbOn;
+
     config.saved_at = new Date().toISOString();
 
     const json = JSON.stringify(config);
@@ -1242,6 +1711,10 @@
   window.OC = {
     onCellChange,
     onRamMinFreqChange,
+    onStorageReadAheadChange,
+    onStorageSchedulerChange,
+    onStorageFieldChange,
+    onStorageToggle,
     toggleAddForm,
     confirmAddEntry,
     removeRow,
@@ -1263,6 +1736,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     loadData();
+    loadStorageData().then(() => renderAll());
   });
 
 })();
