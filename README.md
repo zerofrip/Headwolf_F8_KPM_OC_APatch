@@ -11,7 +11,6 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 - **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; defaults to 1450 MHz on boot
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
-- **GPU Module Reload** *(opt-in)* — Replaces `mtk_gpufreq_mt6897.ko` with a pre-patched binary that encodes the new top OPP, bypassing GPUEB re-initialization
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **WebUI** — Browser-based interface for CPU/GPU OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, one-tap apply
 - **Configuration Persistence** — OC params and scaling limits saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
@@ -21,11 +20,7 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 ```text
 ├── module.prop                     # APatch module metadata
 ├── kpm_oc.ko                       # Compiled kernel module (v7.2)
-├── mtk_gpufreq_mt6897_1450.ko      # Pre-patched GPU freq driver (optional, 1450 MHz top)
-├── service.sh                      # Boot-time service (v7.0)
-├── tools/
-│   ├── patch_mtk_gpufreq_1450.py   # Binary patcher: set custom top GPU OPP in .ko
-│   └── auto_tune_top_opp.sh        # Helper: auto-selects top OPP for reload
+├── service.sh                      # Boot-time service (v7.2)
 └── webroot/
     ├── index.html                  # WebUI shell (CPU/GPU tabs)
     ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs)
@@ -34,21 +29,17 @@ APatch/KernelSU module (service.sh v7.2) providing CPU and GPU overclocking for 
 
 ## Boot Flow (`service.sh`)
 
-1. **(opt-in)** Reload `mtk_gpufreq_mt6897.ko` with the patched binary (`enable_gpufreq_reload` flag file)
-   - Unloads `mtk_gpu_hal` → `mtk_gpu_power_throttling` → `mtk_gpufreq_wrapper` → `mtk_gpufreq_mt6897`
-   - Loads patched core, then vendor companions
-   - Verifies `gpu_working_opp_table[0] ≥ 1450000 KHz`; rolls back if not
-2. Parse `oc_config.json` for saved OC params (CPU + GPU) and build `insmod` parameter string
-3. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
+1. Parse `oc_config.json` for saved OC params (CPU + GPU) and build `insmod` parameter string
+2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
    - CPU OC auto-applies if any `cpu_oc_*_freq` param is nonzero
-4. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
-5. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
-6. Log CPU/GPU OC results
-7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
-8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
-9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+3. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
+4. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
+5. Log CPU/GPU OC results
+6. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+7. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+8. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
 
 ### Config Persistence
 
@@ -163,21 +154,6 @@ echo clear > /sys/module/kpm_oc/parameters/gpu_volt_override
 cat /proc/gpufreqv2/gpu_working_opp_table | head -5
 ```
 
-### Method B — Binary-patched `.ko` reload (opt-in, persistent across GPUEB re-init)
-
-1. Generate a patched GPU driver with `tools/patch_mtk_gpufreq_1450.py`:
-   ```bash
-   python3 tools/patch_mtk_gpufreq_1450.py \
-       /vendor/lib/modules/mtk_gpufreq_mt6897.ko \
-       mtk_gpufreq_mt6897_1450.ko \
-       --new-top-freq 1450000
-   ```
-2. Place the output as `mtk_gpufreq_mt6897_1450.ko` in the module root
-3. Create the flag file: `touch /data/adb/modules/f8_kpm_oc_manager/enable_gpufreq_reload`
-4. Reboot — `service.sh` will replace the vendor driver on next boot
-
-The generated file `mtk_gpufreq_mt6897_1450.ko` (1450 MHz) is included in this repository.
-
 ## Control Interfaces
 
 | Action | Interface |
@@ -208,8 +184,7 @@ For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-ma
 
 1. Build `kpm_oc.ko` from [Headwolf_F8_KPM_OC_Kernel](https://github.com/zerofrip/Headwolf_F8_KPM_OC_Kernel)
 2. Place `kpm_oc.ko` in the module root directory
-3. (Optional) Generate and place `mtk_gpufreq_mt6897_1450.ko` with `tools/patch_mtk_gpufreq_1450.py`
-4. ZIP the module directory and flash via APatch / KernelSU manager
+3. ZIP the module directory and flash via APatch / KernelSU manager
 
 ## Requirements
 

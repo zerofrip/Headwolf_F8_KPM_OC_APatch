@@ -2,21 +2,12 @@
 # Headwolf F8 KPM OC Manager - Service Script v7.2
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 # Restores OC config (CPU/GPU) and scaling limits from saved config
-# Optional: safe-ish boot-time reload of GPUFreq modules with patched core ko
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
 CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
 CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
 GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 CPU_RAW_FILE="${CONFIG_DIR}/cpu_raw_dump"
-GPU_RELOAD_FLAG="${MODDIR}/enable_gpufreq_reload"
-GPU_PATCHED_CORE_KO="${MODDIR}/mtk_gpufreq_mt6897_1450.ko"
-GPU_EXPECT_MIN_TOP_KHZ=1450000
-GPU_VENDOR_DIR="/vendor/lib/modules"
-GPU_VENDOR_CORE_KO="${GPU_VENDOR_DIR}/mtk_gpufreq_mt6897.ko"
-GPU_VENDOR_WRAPPER_KO="${GPU_VENDOR_DIR}/mtk_gpufreq_wrapper.ko"
-GPU_VENDOR_PWRTHROTTLE_KO="${GPU_VENDOR_DIR}/mtk_gpu_power_throttling.ko"
-GPU_VENDOR_HAL_KO="${GPU_VENDOR_DIR}/mtk_gpu_hal.ko"
 
 mkdir -p "${CONFIG_DIR}" 2>/dev/null
 
@@ -59,70 +50,6 @@ resolve_gpu_devfreq_path() {
     done
     return 1
 }
-
-verify_gpu_top_freq() {
-    top_line=$(cat /proc/gpufreqv2/gpu_working_opp_table 2>/dev/null | head -1)
-    top_freq=$(echo "${top_line}" | sed -n 's/.*freq: *\([0-9]*\).*/\1/p')
-    [ -n "${top_freq}" ] && [ "${top_freq}" -ge "${GPU_EXPECT_MIN_TOP_KHZ}" ]
-}
-
-reload_gpufreq_modules() {
-    # Opt-in only. Create ${MODDIR}/enable_gpufreq_reload to activate.
-    if [ ! -f "${GPU_RELOAD_FLAG}" ]; then
-        return 0
-    fi
-
-    if [ ! -f "${GPU_PATCHED_CORE_KO}" ]; then
-        logi "GPU reload skipped: patched ko not found (${GPU_PATCHED_CORE_KO})"
-        return 0
-    fi
-
-    logi "GPU reload: start"
-
-    # Unload in reverse dependency order. If core cannot unload, abort safely.
-    unload_mod "mtk_gpu_hal"
-    unload_mod "mtk_gpu_power_throttling"
-    unload_mod "mtk_gpufreq_wrapper"
-    unload_mod "mtk_gpufreq_mt6897"
-
-    if is_loaded "mtk_gpufreq_mt6897"; then
-        logi "GPU reload aborted: mtk_gpufreq_mt6897 still in use"
-        return 0
-    fi
-
-    # Load patched core first, then vendor companions.
-    if ! load_mod "${GPU_PATCHED_CORE_KO}"; then
-        logi "GPU reload failed: cannot load patched core"
-        # Best-effort restore original
-        load_mod "${GPU_VENDOR_CORE_KO}" || true
-        load_mod "${GPU_VENDOR_WRAPPER_KO}" || true
-        load_mod "${GPU_VENDOR_PWRTHROTTLE_KO}" || true
-        load_mod "${GPU_VENDOR_HAL_KO}" || true
-        return 0
-    fi
-
-    load_mod "${GPU_VENDOR_WRAPPER_KO}" || true
-    load_mod "${GPU_VENDOR_PWRTHROTTLE_KO}" || true
-    load_mod "${GPU_VENDOR_HAL_KO}" || true
-    sleep 1
-
-    if verify_gpu_top_freq; then
-        logi "GPU reload success: top OPP is ${GPU_EXPECT_MIN_TOP_KHZ} KHz or higher"
-    else
-        logi "GPU reload verification failed (< ${GPU_EXPECT_MIN_TOP_KHZ} KHz), rolling back"
-        unload_mod "mtk_gpu_hal"
-        unload_mod "mtk_gpu_power_throttling"
-        unload_mod "mtk_gpufreq_wrapper"
-        unload_mod "mtk_gpufreq_mt6897"
-        load_mod "${GPU_VENDOR_CORE_KO}" || true
-        load_mod "${GPU_VENDOR_WRAPPER_KO}" || true
-        load_mod "${GPU_VENDOR_PWRTHROTTLE_KO}" || true
-        load_mod "${GPU_VENDOR_HAL_KO}" || true
-    fi
-}
-
-# Optional early GPUFreq reload attempt (does nothing unless flag file exists)
-reload_gpufreq_modules
 
 # ─── Parse OC config for insmod params ───────────────────────────────────
 # Flat JSON keys: cpu_oc_{l,b,p}_{freq,volt}, gpu_oc_{freq,volt,vsram}
