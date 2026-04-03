@@ -380,7 +380,7 @@
             <thead>
               <tr>
                 <th>#</th>
-                <th>Freq (KHz)</th>
+                <th>Freq (MHz)</th>
                 <th>Voltage (µV)</th>
                 <th></th>
                 <th style="width:60px"></th>
@@ -398,8 +398,9 @@
               <tr class="${rowClass}" data-idx="${idx}">
                 <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
                 <td>
-                  <input type="number" class="cell-input" value="${entry.freq}"
+                  <input type="number" class="cell-input" value="${Math.round(entry.freq / 1000)}"
                          data-field="freq" data-type="CPU" data-cluster="${cluster.id}" data-idx="${idx}"
+                         data-unit="mhz"
                          onchange="window.OC.onCellChange(this)">
                   <div class="freq-bar" style="margin-top:3px">
                     <div class="freq-bar-fill cpu" style="width:${pct}%"></div>
@@ -430,7 +431,7 @@
 
         <div id="cpu-add-form-${cluster.id}" class="add-form">
           <div class="add-form-row">
-            <input type="number" class="cell-input" placeholder="Freq (KHz)" id="add-cpu-freq-${cluster.id}">
+            <input type="number" class="cell-input" placeholder="Freq (MHz)" id="add-cpu-freq-${cluster.id}">
             <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-cpu-volt-${cluster.id}">
             <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('CPU', ${cluster.id})">✓</button>
             <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">✕</button>
@@ -470,7 +471,7 @@
             <thead>
               <tr>
                 <th>#</th>
-                <th>Freq (KHz)</th>
+                <th>Freq (MHz)</th>
                 <th>Voltage (µV)</th>
                 <th>VSRAM (µV)</th>
                 <th></th>
@@ -489,8 +490,9 @@
               <tr class="${rowClass}" data-idx="${idx}">
                 <td><span class="cell-static" style="color:var(--text-muted)">${idx + 1}</span></td>
                 <td>
-                  <input type="number" class="cell-input" value="${entry.freq}"
+                  <input type="number" class="cell-input" value="${Math.round(entry.freq / 1000)}"
                          data-field="freq" data-type="GPU" data-cluster="0" data-idx="${idx}"
+                         data-unit="mhz"
                          onchange="window.OC.onCellChange(this)">
                   <div class="freq-bar" style="margin-top:3px">
                     <div class="freq-bar-fill gpu" style="width:${pct}%"></div>
@@ -524,7 +526,7 @@
 
         <div id="gpu-add-form-0" class="add-form">
           <div class="add-form-row">
-            <input type="number" class="cell-input" placeholder="Freq (KHz)" id="add-gpu-freq-0">
+            <input type="number" class="cell-input" placeholder="Freq (MHz)" id="add-gpu-freq-0">
             <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-gpu-volt-0">
             <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('GPU', 0)">✓</button>
             <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">✕</button>
@@ -1145,11 +1147,21 @@
     const clusterId = parseInt(input.dataset.cluster, 10);
     const idx = parseInt(input.dataset.idx, 10);
     const field = input.dataset.field;
-    const newValue = parseInt(input.value, 10);
+    const isMhz = input.dataset.unit === 'mhz';
+    let newValue = parseInt(input.value, 10);
 
     if (isNaN(newValue) || newValue < 0) {
       showToast('Invalid value', 'error');
       return;
+    }
+
+    /* freq inputs display MHz — convert to KHz for internal state */
+    if (field === 'freq' && isMhz) {
+      if (newValue > 10000) {
+        showToast('MHz単位で入力してください（例: 3500）', 'error');
+        return;
+      }
+      newValue = newValue * 1000;
     }
 
     let entry;
@@ -1205,11 +1217,15 @@
     const voltInput = document.getElementById(`add-${type.toLowerCase()}-volt-${clusterId}`);
     if (!freqInput || !voltInput) return;
 
-    const freq = parseInt(freqInput.value, 10);
+    let freq = parseInt(freqInput.value, 10);
     const volt = parseInt(voltInput.value, 10);
 
     if (isNaN(freq) || freq <= 0) { showToast('Invalid frequency', 'error'); return; }
     if (isNaN(volt) || volt <= 0) { showToast('Invalid voltage', 'error'); return; }
+    if (freq > 10000) { showToast('MHz単位で入力してください（例: 3500）', 'error'); return; }
+
+    /* Input is in MHz — convert to KHz for internal state */
+    freq = freq * 1000;
 
     const newEntry = {
       freq, volt, vsram: 0,
