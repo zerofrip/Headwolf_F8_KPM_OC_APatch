@@ -262,17 +262,17 @@
         stderr: '',
       };
     }
-    if (cmd.includes('dumpsys package') && cmd.includes('awk')) {
+    if (cmd.includes('IconExtractor -l')) {
       return {
         errno: 0,
-        stdout: 'com.miHoYo.GenshinImpact|Genshin Impact\ncom.tencent.ig|PUBG Mobile\ncom.supercell.clashofclans|Clash of Clans\ncom.activision.callofduty.shooter|Call of Duty Mobile\ncom.garena.game.codm|COD Mobile Garena\ncom.innersloth.spacemafia|Among Us\ncom.mojang.minecraftpe|Minecraft\ncom.roblox.client|Roblox\ncom.mobile.legends|Mobile Legends\njp.naver.line.android|LINE\ncom.twitter.android|Twitter\ncom.instagram.android|Instagram\ncom.spotify.music|Spotify',
+        stdout: 'com.miHoYo.GenshinImpact|原神\ncom.tencent.ig|PUBG Mobile\ncom.supercell.clashofclans|クラッシュ・オブ・クラン\ncom.activision.callofduty.shooter|Call of Duty Mobile\ncom.garena.game.codm|COD Mobile Garena\ncom.innersloth.spacemafia|Among Us\ncom.mojang.minecraftpe|Minecraft\ncom.roblox.client|Roblox\ncom.mobile.legends|Mobile Legends\njp.naver.line.android|LINE\ncom.twitter.android|Twitter\ncom.instagram.android|Instagram\ncom.spotify.music|Spotify',
         stderr: '',
       };
     }
     if (cmd.includes('mResumedActivity') || cmd.includes('mCurrentFocus')) {
       return { errno: 0, stdout: 'com.android.launcher3', stderr: '' };
     }
-    if (cmd.includes('dump-icon') && cmd.includes('base64')) {
+    if (cmd.includes('IconExtractor')) {
       // Mock: return empty (icons not available in mock mode)
       return { errno: 0, stdout: '', stderr: '' };
     }
@@ -1656,18 +1656,16 @@
     ag.loading = false;
     if (selectorEl) selectorEl.innerHTML = renderAppSelector();
 
-    // Async: try to load real labels via dumpsys
-    const labelCmd =
-      "dumpsys package 2>/dev/null | awk '" +
-      '/Package \\[/{pkg=$0; gsub(/.*\\[/,\"\",pkg); gsub(/\\].*/,\"\",pkg)} ' +
-      '/nonLocalizedLabel=/{lbl=$0; gsub(/.*nonLocalizedLabel=/,\"\",lbl); gsub(/ .*/,\"\",lbl); ' +
-      "if(lbl!=\"null\"&&!seen[pkg]++){print pkg\"|\"lbl}}'";
+    // Async: load localized labels via IconExtractor -l (uses device locale)
+    var DEX = '/data/adb/modules/f8_kpm_oc_manager/icon_extractor.dex';
+    var labelCmd = 'app_process -Djava.class.path=' + DEX + ' / IconExtractor -l ' + pkgs.join(' ') + ' 2>/dev/null';
     const labelRes = await exec(labelCmd);
     if (labelRes.stdout.trim()) {
       const labelMap = {};
       for (const line of labelRes.stdout.trim().split('\n')) {
-        const parts = line.split('|');
-        if (parts[0] && parts[1]) labelMap[parts[0].trim()] = parts[1].trim();
+        const sep = line.indexOf('|');
+        if (sep < 0) continue;
+        labelMap[line.substring(0, sep).trim()] = line.substring(sep + 1).trim();
       }
       for (const app of ag.allApps) {
         if (labelMap[app.pkg]) app.label = labelMap[app.pkg];
@@ -1679,54 +1677,43 @@
     loadAppIcons();
   }
 
-  /** Load app icons in batches via cmd package dump-icon (Android 13+) */
+  /** Load app icons via app_process + icon_extractor.dex */
   async function loadAppIcons() {
     const ag = state.profile.autoGaming;
     if (ag.allApps.length === 0) return;
 
-    const BATCH = 8;
-    for (let i = 0; i < ag.allApps.length; i += BATCH) {
-      const batch = ag.allApps.slice(i, i + BATCH);
-      const pkgs = batch.map(function(a) { return a.pkg; });
+    var DEX = '/data/adb/modules/f8_kpm_oc_manager/icon_extractor.dex';
+    var pkgs = ag.allApps.map(function(a) { return a.pkg; });
 
-      const cmd = 'for pkg in ' + pkgs.join(' ') + '; do ' +
-        'icon=$(cmd package dump-icon "$pkg" 2>/dev/null | base64 -w0); ' +
-        '[ -n "$icon" ] && echo "$pkg|$icon"; ' +
-        'done';
+    // Single app_process invocation for all packages (startup is expensive)
+    var cmd = 'app_process -Djava.class.path=' + DEX + ' / IconExtractor ' + pkgs.join(' ') + ' 2>/dev/null';
+    var res = await exec(cmd);
+    if (!res.stdout.trim()) return;
 
-      const res = await exec(cmd);
-      if (!res.stdout.trim()) {
-        // If first batch returns nothing, cmd may not be available — abort
-        if (i === 0) return;
-        continue;
+    var changed = false;
+    for (var _i3 = 0, _lines = res.stdout.trim().split('\n'); _i3 < _lines.length; _i3++) {
+      var line = _lines[_i3];
+      var sep = line.indexOf('|');
+      if (sep < 0) continue;
+      var pkg = line.substring(0, sep);
+      var b64 = line.substring(sep + 1);
+      if (b64.length > 20) {
+        ag.iconMap[pkg] = b64;
+        changed = true;
       }
+    }
 
-      let changed = false;
-      for (const line of res.stdout.trim().split('\n')) {
-        const sep = line.indexOf('|');
-        if (sep < 0) continue;
-        const pkg = line.substring(0, sep);
-        const b64 = line.substring(sep + 1);
-        if (b64.length > 20) {
-          ag.iconMap[pkg] = b64;
-          changed = true;
-        }
+    if (changed) {
+      var container = document.querySelector('.app-list-container');
+      if (container) {
+        var scrollTop = container.scrollTop;
+        var el = document.getElementById('gaming-app-selector');
+        if (el && ag._selectorVisible) el.innerHTML = renderAppSelector();
+        container = document.querySelector('.app-list-container');
+        if (container) container.scrollTop = scrollTop;
       }
-
-      // Update visible icons via direct DOM updates (preserve scroll position)
-      if (changed) {
-        var container = document.querySelector('.app-list-container');
-        if (container) {
-          var scrollTop = container.scrollTop;
-          var el = document.getElementById('gaming-app-selector');
-          if (el && ag._selectorVisible) el.innerHTML = renderAppSelector();
-          container = document.querySelector('.app-list-container');
-          if (container) container.scrollTop = scrollTop;
-        }
-        // Also refresh chips in profile section
-        var profileEl = document.getElementById('profile-content');
-        if (profileEl) profileEl.innerHTML = renderProfileContent();
-      }
+      var profileEl = document.getElementById('profile-content');
+      if (profileEl) profileEl.innerHTML = renderProfileContent();
     }
   }
 
