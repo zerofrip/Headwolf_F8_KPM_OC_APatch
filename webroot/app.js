@@ -40,6 +40,30 @@
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
   const CLUSTER_CORES = { 0: 'Cortex-A520', 4: 'Cortex-A720', 7: 'Cortex-A720' };
 
+  const POWER_PRESETS = [
+    {
+      label: 'Battery Save', icon: '🔋',
+      desc: 'Reduced clocks · max battery life',
+      cpuMax: { 0: 1600000, 4: 2000000, 7: 2000000 },
+      dramMin: 800000000,
+      cpuThermal: 0, gpuThermal: 0,
+    },
+    {
+      label: 'Normal', icon: '⚡',
+      desc: 'OC as configured · balanced',
+      cpuMax: null,  // null = use saved config values
+      dramMin: null,
+      cpuThermal: 0, gpuThermal: 0,
+    },
+    {
+      label: 'Performance', icon: '🚀',
+      desc: 'Max OC · thermal mitigation · DRAM max',
+      cpuMax: { 0: 3800000, 4: 3800000, 7: 4000000 },
+      dramMin: 6400000000,
+      cpuThermal: 1, gpuThermal: 1,
+    },
+  ];
+
   /* ─── State ───────────────────────────────────────────────────────── */
   const state = {
     activeTab: 'cpu',
@@ -80,6 +104,21 @@
       temps: {},        // { zone_type_string: temp_celsius }
       gpuFixActive: false,    // true when fix_target_opp_index=0 is held
       cpuOrigTrips: [], // [{path, origTemp}] — captured on first loadThermalData for undo
+    },
+    profile: {
+      powerMode: 1,     // 0=battery, 1=normal, 2=performance
+      autoGaming: {
+        enabled: false,
+        apps: [],         // selected gaming app package names
+        allApps: [],      // [{pkg, label}] all installed 3rd-party apps
+        iconMap: {},      // { pkg: base64_png_string }
+        loading: false,
+        activeApp: '',    // current foreground package
+        boosted: false,   // currently in gaming boost
+        pollTimer: null,  // setInterval ID
+        _selectorVisible: false,
+        _searchQuery: '',
+      },
     },
   };
 
@@ -215,6 +254,27 @@
         ].join('\n'),
         stderr: '',
       };
+    }
+    if (cmd.includes('pm list packages -3')) {
+      return {
+        errno: 0,
+        stdout: 'package:com.miHoYo.GenshinImpact\npackage:com.tencent.ig\npackage:com.supercell.clashofclans\npackage:com.activision.callofduty.shooter\npackage:com.garena.game.codm\npackage:com.innersloth.spacemafia\npackage:com.mojang.minecraftpe\npackage:com.roblox.client\npackage:com.mobile.legends\njp.naver.line.android\npackage:com.twitter.android\npackage:com.instagram.android\npackage:com.spotify.music',
+        stderr: '',
+      };
+    }
+    if (cmd.includes('dumpsys package') && cmd.includes('awk')) {
+      return {
+        errno: 0,
+        stdout: 'com.miHoYo.GenshinImpact|Genshin Impact\ncom.tencent.ig|PUBG Mobile\ncom.supercell.clashofclans|Clash of Clans\ncom.activision.callofduty.shooter|Call of Duty Mobile\ncom.garena.game.codm|COD Mobile Garena\ncom.innersloth.spacemafia|Among Us\ncom.mojang.minecraftpe|Minecraft\ncom.roblox.client|Roblox\ncom.mobile.legends|Mobile Legends\njp.naver.line.android|LINE\ncom.twitter.android|Twitter\ncom.instagram.android|Instagram\ncom.spotify.music|Spotify',
+        stderr: '',
+      };
+    }
+    if (cmd.includes('mResumedActivity') || cmd.includes('mCurrentFocus')) {
+      return { errno: 0, stdout: 'com.android.launcher3', stderr: '' };
+    }
+    if (cmd.includes('dump-icon') && cmd.includes('base64')) {
+      // Mock: return empty (icons not available in mock mode)
+      return { errno: 0, stdout: '', stderr: '' };
     }
     return { errno: 0, stdout: '', stderr: '' };
   }
@@ -886,6 +946,154 @@
     return html;
   }
 
+  /* ─── Render Profile Content ───────────────────────────────────────── */
+  function renderProfileContent() {
+    const pm = state.profile.powerMode;
+    const ag = state.profile.autoGaming;
+
+    let modeCards = '';
+    POWER_PRESETS.forEach((preset, idx) => {
+      modeCards += `
+        <div class="power-mode-card ${pm === idx ? 'active' : ''}"
+             onclick="window.OC.setPowerMode(${idx})">
+          <span class="pm-icon">${preset.icon}</span>
+          <span class="pm-label">${preset.label}</span>
+          <span class="pm-desc">${preset.desc}</span>
+        </div>`;
+    });
+
+    // Gaming status
+    let statusHtml = '';
+    if (ag.enabled) {
+      if (ag.boosted) {
+        statusHtml = '<div class="gaming-status boosted">\ud83c\udfae Gaming boost active: ' + ag.activeApp + '</div>';
+      } else if (ag.pollTimer) {
+        statusHtml = '<div class="gaming-status monitoring">\ud83d\udc41 Monitoring foreground app...</div>';
+      } else {
+        statusHtml = '<div class="gaming-status idle">\u23f8 Auto Gaming enabled \u2014 starts on Apply</div>';
+      }
+    }
+
+    // Selected apps chips
+    const chips = ag.apps.length > 0
+      ? ag.apps.map(function(pkg) {
+          const app = ag.allApps.find(function(a) { return a.pkg === pkg; });
+          const display = app && app.label !== pkg ? app.label : pkg.split('.').pop();
+          const chipIcon = ag.iconMap[pkg]
+            ? '<img class="chip-icon" src="data:image/png;base64,' + ag.iconMap[pkg] + '"> '
+            : '';
+          return '<span class="selected-app-chip" onclick="window.OC.removeGamingApp(\'' + pkg + '\')" title="' + pkg + '">' +
+            chipIcon + display + ' <span class="chip-x">\u2715</span></span>';
+        }).join('')
+      : '<span style="color:var(--text-muted);font-size:0.78rem">No apps selected</span>';
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">\ud83c\udfaf</span>
+            Power Mode
+          </div>
+          <span class="card-badge cpu">${POWER_PRESETS[pm].label}</span>
+        </div>
+        <div class="power-mode-grid">
+          ${modeCards}
+        </div>
+        <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
+          \u26a0 Switching mode updates CPU scaling limits, DRAM floor, and thermal settings.
+          Tap <strong>Apply Changes</strong> to activate.
+        </div>
+      </div>
+
+      <div class="card gaming-section">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">\ud83c\udfae</span>
+            Auto Gaming Mode
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" ${ag.enabled ? 'checked' : ''}
+                   onchange="window.OC.toggleAutoGaming(this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        ${statusHtml}
+        <div style="padding:0 0 8px;font-size:0.75rem;color:var(--text-secondary);line-height:1.5">
+          Selected apps automatically trigger Performance OC when in foreground.
+          Works across all power modes. A background daemon keeps monitoring after WebUI closes.
+        </div>
+        <div style="margin-bottom:8px">
+          <div class="config-label" style="margin-bottom:6px">Gaming Apps (${ag.apps.length})</div>
+          <div class="selected-apps">${chips}</div>
+        </div>
+        ${ag.enabled ? `
+          <button class="btn btn-secondary btn-sm" style="width:100%"
+                  onclick="window.OC.showAppSelector()">
+            + Select Apps
+          </button>
+        ` : ''}
+      </div>`;
+  }
+
+  /* ─── Render App Selector ────────────────────────────────────────── */
+  function renderAppSelector() {
+    const ag = state.profile.autoGaming;
+    if (!ag._selectorVisible) return '';
+
+    const query = (ag._searchQuery || '').toLowerCase();
+    const filtered = ag.allApps.filter(function(a) {
+      return a.pkg.toLowerCase().includes(query) || a.label.toLowerCase().includes(query);
+    });
+
+    let listHtml = '';
+    if (ag.loading) {
+      listHtml = '<div class="app-list-loading">Loading installed apps...</div>';
+    } else if (filtered.length === 0) {
+      listHtml = '<div class="app-list-empty">No apps found</div>';
+    } else {
+      listHtml = filtered.map(function(a) {
+        const sel = ag.apps.includes(a.pkg);
+        const iconHtml = ag.iconMap[a.pkg]
+          ? '<img class="app-icon" src="data:image/png;base64,' + ag.iconMap[a.pkg] + '">'
+          : '<div class="app-icon-placeholder">' + (a.label || a.pkg).charAt(0) + '</div>';
+        return '<div class="app-item ' + (sel ? 'selected' : '') + '" ' +
+          'onclick="window.OC.toggleGamingApp(\'' + a.pkg + '\')">' +
+          iconHtml +
+          '<div class="app-info">' +
+          '<div class="app-label">' + a.label + '</div>' +
+          '<div class="app-pkg">' + a.pkg + '</div>' +
+          '</div>' +
+          '<div class="app-check">' + (sel ? '\u2713' : '') + '</div>' +
+          '</div>';
+      }).join('');
+    }
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">\ud83d\udcf1</span>
+            Installed Apps
+          </div>
+          <button class="btn btn-secondary btn-sm" style="padding:4px 10px"
+                  onclick="window.OC.hideAppSelector()">\u2715 Close</button>
+        </div>
+        <div class="app-search-wrap">
+          <span class="app-search-icon">\ud83d\udd0d</span>
+          <input type="text" class="app-search-input"
+                 placeholder="Search apps..."
+                 value="${ag._searchQuery || ''}"
+                 oninput="window.OC.filterApps(this.value)">
+        </div>
+        <div class="app-list-container">
+          ${listHtml}
+        </div>
+        <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted)">
+          ${ag.allApps.length} apps \u00b7 ${ag.apps.length} selected
+        </div>
+      </div>`;
+  }
+
   /* ─── Render Thermal Mitigation Card ─────────────────────────────── */
   function renderThermalCard(type) {
     const isGpu = type === 'gpu';
@@ -1034,6 +1242,10 @@
         storageContainer.innerHTML = renderStorageCard();
       }
     }
+
+    // Profile tab
+    const profileEl = document.getElementById('profile-content');
+    if (profileEl) profileEl.innerHTML = renderProfileContent();
   }
 
   /* ─── Data Loading ────────────────────────────────────────────────── */
@@ -1109,6 +1321,14 @@
       const gpuTM = thermalCfgRes.stdout.match(/"gpu_thermal_mode"\s*:\s*(\d+)/);
       if (cpuTM) state.thermal.cpuMode = parseInt(cpuTM[1], 10) || 0;
       if (gpuTM) state.thermal.gpuMode = parseInt(gpuTM[1], 10) || 0;
+
+      // Profile / Auto Gaming config
+      const pmM = thermalCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
+      const agM = thermalCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
+      const gaM = thermalCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
+      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10) || 1;
+      if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
+      if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
     }
 
     // --- RAM Data ---
@@ -1372,6 +1592,265 @@
     if (cpuEl) cpuEl.innerHTML = renderThermalCard('cpu');
     const gpuEl = document.getElementById('gpu-thermal-card');
     if (gpuEl) gpuEl.innerHTML = renderThermalCard('gpu');
+  }
+
+  /* ─── Power Mode ────────────────────────────────────────────────────── */
+  function setPowerMode(mode) {
+    state.profile.powerMode = mode;
+    const preset = POWER_PRESETS[mode];
+
+    // Update UI state to reflect preset
+    if (preset.cpuMax) {
+      for (const cluster of state.cpuClusters) {
+        if (preset.cpuMax[cluster.id] !== undefined) {
+          cluster.curMax = preset.cpuMax[cluster.id];
+        }
+      }
+    }
+    if (preset.dramMin !== null) {
+      state.ram.selectedMinFreq = preset.dramMin;
+    }
+    state.thermal.cpuMode = preset.cpuThermal;
+    state.thermal.gpuMode = preset.gpuThermal;
+
+    renderAll();
+  }
+
+  /** Quick hardware apply for gaming boost/un-boost (bypasses full applyAll flow) */
+  async function applyPowerModeQuick(mode) {
+    const preset = POWER_PRESETS[mode];
+    if (!preset) return;
+
+    if (preset.cpuMax) {
+      for (const policy of Object.keys(preset.cpuMax)) {
+        await exec('echo ' + preset.cpuMax[policy] + ' > /sys/devices/system/cpu/cpufreq/policy' + policy + '/scaling_max_freq 2>/dev/null');
+      }
+    }
+    if (preset.dramMin !== null) {
+      await exec('echo ' + preset.dramMin + ' > ' + DRAM_DEVFREQ + '/min_freq 2>/dev/null');
+    }
+    state.thermal.cpuMode = preset.cpuThermal;
+    state.thermal.gpuMode = preset.gpuThermal;
+    await applyThermal();
+
+    if (mode === 2) {
+      await exec('echo 1 > ' + KS_PARAMS + 'cpu_oc_apply 2>/dev/null');
+      await exec('echo 1 > ' + KS_PARAMS + 'gpu_oc_apply 2>/dev/null');
+    }
+  }
+
+  /* ─── Auto Gaming: App Loading ────────────────────────────────────── */
+  async function loadInstalledApps() {
+    const ag = state.profile.autoGaming;
+    ag.loading = true;
+    const selectorEl = document.getElementById('gaming-app-selector');
+    if (selectorEl) selectorEl.innerHTML = renderAppSelector();
+
+    // Fast: package names only
+    const pkgRes = await exec('pm list packages -3 2>/dev/null | sed "s/package://" | sort');
+    const pkgs = pkgRes.stdout.trim().split('\n').filter(function(p) { return p.trim().length > 0; });
+    ag.allApps = pkgs.map(function(p) {
+      var pkg = p.trim();
+      return { pkg: pkg, label: pkg.split('.').pop() };
+    });
+    ag.loading = false;
+    if (selectorEl) selectorEl.innerHTML = renderAppSelector();
+
+    // Async: try to load real labels via dumpsys
+    const labelCmd =
+      "dumpsys package 2>/dev/null | awk '" +
+      '/Package \\[/{pkg=$0; gsub(/.*\\[/,\"\",pkg); gsub(/\\].*/,\"\",pkg)} ' +
+      '/nonLocalizedLabel=/{lbl=$0; gsub(/.*nonLocalizedLabel=/,\"\",lbl); gsub(/ .*/,\"\",lbl); ' +
+      "if(lbl!=\"null\"&&!seen[pkg]++){print pkg\"|\"lbl}}'";
+    const labelRes = await exec(labelCmd);
+    if (labelRes.stdout.trim()) {
+      const labelMap = {};
+      for (const line of labelRes.stdout.trim().split('\n')) {
+        const parts = line.split('|');
+        if (parts[0] && parts[1]) labelMap[parts[0].trim()] = parts[1].trim();
+      }
+      for (const app of ag.allApps) {
+        if (labelMap[app.pkg]) app.label = labelMap[app.pkg];
+      }
+      if (selectorEl) selectorEl.innerHTML = renderAppSelector();
+    }
+
+    // Async: load app icons (non-blocking)
+    loadAppIcons();
+  }
+
+  /** Load app icons in batches via cmd package dump-icon (Android 13+) */
+  async function loadAppIcons() {
+    const ag = state.profile.autoGaming;
+    if (ag.allApps.length === 0) return;
+
+    const BATCH = 8;
+    for (let i = 0; i < ag.allApps.length; i += BATCH) {
+      const batch = ag.allApps.slice(i, i + BATCH);
+      const pkgs = batch.map(function(a) { return a.pkg; });
+
+      const cmd = 'for pkg in ' + pkgs.join(' ') + '; do ' +
+        'icon=$(cmd package dump-icon "$pkg" 2>/dev/null | base64 -w0); ' +
+        '[ -n "$icon" ] && echo "$pkg|$icon"; ' +
+        'done';
+
+      const res = await exec(cmd);
+      if (!res.stdout.trim()) {
+        // If first batch returns nothing, cmd may not be available — abort
+        if (i === 0) return;
+        continue;
+      }
+
+      let changed = false;
+      for (const line of res.stdout.trim().split('\n')) {
+        const sep = line.indexOf('|');
+        if (sep < 0) continue;
+        const pkg = line.substring(0, sep);
+        const b64 = line.substring(sep + 1);
+        if (b64.length > 20) {
+          ag.iconMap[pkg] = b64;
+          changed = true;
+        }
+      }
+
+      // Update visible icons via direct DOM updates (preserve scroll position)
+      if (changed) {
+        var container = document.querySelector('.app-list-container');
+        if (container) {
+          var scrollTop = container.scrollTop;
+          var el = document.getElementById('gaming-app-selector');
+          if (el && ag._selectorVisible) el.innerHTML = renderAppSelector();
+          container = document.querySelector('.app-list-container');
+          if (container) container.scrollTop = scrollTop;
+        }
+        // Also refresh chips in profile section
+        var profileEl = document.getElementById('profile-content');
+        if (profileEl) profileEl.innerHTML = renderProfileContent();
+      }
+    }
+  }
+
+  function showAppSelector() {
+    state.profile.autoGaming._selectorVisible = true;
+    state.profile.autoGaming._searchQuery = '';
+    if (state.profile.autoGaming.allApps.length === 0) {
+      loadInstalledApps();
+    }
+    const el = document.getElementById('gaming-app-selector');
+    if (el) el.innerHTML = renderAppSelector();
+  }
+
+  function hideAppSelector() {
+    state.profile.autoGaming._selectorVisible = false;
+    const el = document.getElementById('gaming-app-selector');
+    if (el) el.innerHTML = '';
+  }
+
+  function filterApps(query) {
+    state.profile.autoGaming._searchQuery = query;
+    const el = document.getElementById('gaming-app-selector');
+    if (el) el.innerHTML = renderAppSelector();
+  }
+
+  function toggleGamingApp(pkg) {
+    const apps = state.profile.autoGaming.apps;
+    const idx = apps.indexOf(pkg);
+    if (idx >= 0) apps.splice(idx, 1);
+    else apps.push(pkg);
+    const el = document.getElementById('gaming-app-selector');
+    if (el) el.innerHTML = renderAppSelector();
+    const profileEl = document.getElementById('profile-content');
+    if (profileEl) profileEl.innerHTML = renderProfileContent();
+  }
+
+  function removeGamingApp(pkg) {
+    const apps = state.profile.autoGaming.apps;
+    const idx = apps.indexOf(pkg);
+    if (idx >= 0) apps.splice(idx, 1);
+    const profileEl = document.getElementById('profile-content');
+    if (profileEl) profileEl.innerHTML = renderProfileContent();
+    if (state.profile.autoGaming._selectorVisible) {
+      const el = document.getElementById('gaming-app-selector');
+      if (el) el.innerHTML = renderAppSelector();
+    }
+  }
+
+  function toggleAutoGaming(enabled) {
+    state.profile.autoGaming.enabled = enabled;
+    if (!enabled) stopGamingMonitor();
+    const el = document.getElementById('profile-content');
+    if (el) el.innerHTML = renderProfileContent();
+  }
+
+  /* ─── Auto Gaming: Foreground Monitor ─────────────────────────────── */
+  async function startGamingMonitor() {
+    const ag = state.profile.autoGaming;
+    if (ag.pollTimer) clearInterval(ag.pollTimer);
+    if (!ag.enabled || ag.apps.length === 0) return;
+
+    ag.pollTimer = setInterval(function() { checkForegroundApp(); }, 5000);
+    await checkForegroundApp();
+    const el = document.getElementById('profile-content');
+    if (el) el.innerHTML = renderProfileContent();
+  }
+
+  function stopGamingMonitor() {
+    const ag = state.profile.autoGaming;
+    if (ag.pollTimer) {
+      clearInterval(ag.pollTimer);
+      ag.pollTimer = null;
+    }
+    if (ag.boosted) {
+      ag.boosted = false;
+      applyPowerModeQuick(state.profile.powerMode);
+    }
+    const el = document.getElementById('profile-content');
+    if (el) el.innerHTML = renderProfileContent();
+  }
+
+  async function checkForegroundApp() {
+    const ag = state.profile.autoGaming;
+    const fgCmd =
+      'FG=""; ' +
+      'FG=$(dumpsys activity activities 2>/dev/null | grep "mResumedActivity" | head -1 | ' +
+      "sed 's|.*u0 ||;s|/.*||;s| .*||'); " +
+      '[ -z "$FG" ] && FG=$(dumpsys window 2>/dev/null | grep "mCurrentFocus" | tail -1 | ' +
+      "sed 's|.*{[^ ]* [^ ]* ||;s|/.*||;s|}.*||'); " +
+      'echo "$FG"';
+    const res = await exec(fgCmd);
+    const fgPkg = res.stdout.trim();
+    ag.activeApp = fgPkg;
+
+    const isGaming = fgPkg && ag.apps.includes(fgPkg);
+    if (isGaming && !ag.boosted) {
+      ag.boosted = true;
+      showToast('\ud83c\udfae Gaming boost: ' + fgPkg, 'success');
+      await applyPowerModeQuick(2);
+      const el = document.getElementById('profile-content');
+      if (el) el.innerHTML = renderProfileContent();
+    } else if (!isGaming && ag.boosted) {
+      ag.boosted = false;
+      showToast('Gaming boost off \u2014 reverting', 'info');
+      await applyPowerModeQuick(state.profile.powerMode);
+      const el = document.getElementById('profile-content');
+      if (el) el.innerHTML = renderProfileContent();
+    }
+  }
+
+  /* ─── Gaming Daemon Management ───────────────────────────────────── */
+  async function restartGamingDaemon() {
+    await exec(
+      '[ -f ' + CONFIG_DIR + '/gaming_monitor.pid ] && kill $(cat ' + CONFIG_DIR + '/gaming_monitor.pid) 2>/dev/null;' +
+      ' rm -f ' + CONFIG_DIR + '/gaming_monitor.pid;' +
+      ' nohup sh ' + CONFIG_DIR + '/gaming_monitor.sh > /dev/null 2>&1 &'
+    );
+  }
+
+  async function stopGamingDaemon() {
+    await exec(
+      '[ -f ' + CONFIG_DIR + '/gaming_monitor.pid ] && kill $(cat ' + CONFIG_DIR + '/gaming_monitor.pid) 2>/dev/null;' +
+      ' rm -f ' + CONFIG_DIR + '/gaming_monitor.pid'
+    );
   }
 
   /* ─── Scan & Reload ───────────────────────────────────────────────── */
@@ -1898,6 +2377,28 @@
       renderAll();
     }
 
+    /* Power mode: enforce Battery Save scaling limits after OC apply */
+    if (state.profile.powerMode === 0) {
+      const bs = POWER_PRESETS[0];
+      if (bs.cpuMax) {
+        for (const cluster of state.cpuClusters) {
+          if (bs.cpuMax[cluster.id] !== undefined) {
+            await exec('echo ' + bs.cpuMax[cluster.id] + ' > /sys/devices/system/cpu/cpufreq/policy' + cluster.id + '/scaling_max_freq 2>/dev/null');
+            cluster.curMax = bs.cpuMax[cluster.id];
+          }
+        }
+      }
+    }
+
+    /* Gaming monitor + daemon */
+    if (state.profile.autoGaming.enabled && state.profile.autoGaming.apps.length > 0) {
+      await startGamingMonitor();
+      await restartGamingDaemon();
+    } else {
+      stopGamingMonitor();
+      await stopGamingDaemon();
+    }
+
     /* Read back results from kernel module for user feedback */
     if (anyOcApplied) {
       const cpuRes = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
@@ -1969,6 +2470,11 @@
     config.cpu_thermal_mode = state.thermal.cpuMode;
     config.gpu_thermal_mode = state.thermal.gpuMode;
 
+    /* Profile & Gaming */
+    config.power_mode = state.profile.powerMode;
+    config.auto_gaming = state.profile.autoGaming.enabled ? 1 : 0;
+    config.gaming_apps = state.profile.autoGaming.apps.join(',');
+
     config.saved_at = new Date().toISOString();
 
     const json = JSON.stringify(config);
@@ -1993,6 +2499,16 @@
     refreshTemps,
     setThermalMode,
     applyThermal,
+    /* Profile & Gaming */
+    setPowerMode,
+    toggleAutoGaming,
+    showAppSelector,
+    hideAppSelector,
+    filterApps,
+    toggleGamingApp,
+    removeGamingApp,
+    startGamingMonitor,
+    stopGamingMonitor,
     /* Diagnostic: run from browser console via OC.diagExec() */
     diagExec: async () => {
       const r = await exec('id -Z && cat /proc/self/attr/current && echo "---" && echo test_write > /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1; echo "exit=$?" && cat /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1');

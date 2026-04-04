@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v7.6
+# Headwolf F8 KPM OC Manager - Service Script v8.0
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 # Restores OC config (CPU/GPU/DRAM/IO/UFS) and scaling limits from saved config
 MODDIR=${0%/*}
@@ -193,6 +193,77 @@ fi
 # freq_qos MAX requests capped at the stock max frequency.  This pass also
 # ensures cluster_qos_ptr is populated in the kernel module so the
 # freq_qos_update_request kprobe can start intercepting future stock-cap writes.
+
+# ─── Write Gaming Monitor Daemon Script ──────────────────────────────────
+GAMING_SCRIPT="${CONFIG_DIR}/gaming_monitor.sh"
+cat > "${GAMING_SCRIPT}" << 'GDEOF'
+#!/system/bin/sh
+CFG="/data/adb/modules/f8_kpm_oc_manager/oc_config.json"
+PID_F="/data/adb/modules/f8_kpm_oc_manager/gaming_monitor.pid"
+KS="/sys/module/kpm_oc/parameters/"
+DRAM_DF="/sys/class/devfreq/mtk-dvfsrc-devfreq"
+
+echo $$ > "$PID_F"
+BOOSTED=0
+
+while true; do
+    games=$(grep -o '"gaming_apps":"[^"]*"' "$CFG" 2>/dev/null | sed 's/"gaming_apps":"//;s/"$//')
+    [ -z "$games" ] && sleep 5 && continue
+
+    FG=$(dumpsys activity activities 2>/dev/null | grep 'mResumedActivity' | head -1 | sed 's|.*u0 ||;s|/.*||;s| .*||')
+    [ -z "$FG" ] && FG=$(dumpsys window 2>/dev/null | grep 'mCurrentFocus' | tail -1 | sed 's|.*{[^ ]* [^ ]* ||;s|/.*||;s|}.*||')
+
+    IS_GAMING=0
+    OIFS=$IFS; IFS=','
+    for app in $games; do
+        [ "$FG" = "$app" ] && IS_GAMING=1 && break
+    done
+    IFS=$OIFS
+
+    if [ "$IS_GAMING" = "1" ] && [ "$BOOSTED" = "0" ]; then
+        # Apply Performance preset
+        echo 3800000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null
+        echo 3800000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null
+        echo 4000000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null
+        echo 1 > "${KS}cpu_oc_apply" 2>/dev/null
+        echo 1 > "${KS}gpu_oc_apply" 2>/dev/null
+        # GPU cdev lock
+        for cd in /sys/class/thermal/cooling_device*/; do
+            t=$(cat "${cd}type" 2>/dev/null)
+            case "$t" in *mali*|*gpu*|*GPU*|*GED*) echo 0 > "${cd}cur_state" 2>/dev/null;; esac
+        done
+        echo 6400000000 > "${DRAM_DF}/min_freq" 2>/dev/null
+        log -t "KPM_OC" "Gaming boost ON: $FG"
+        BOOSTED=1
+    elif [ "$IS_GAMING" = "0" ] && [ "$BOOSTED" = "1" ]; then
+        # Revert to saved power mode
+        pm=$(grep -o '"power_mode":[0-9]*' "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+        pm=${pm:-1}
+        case $pm in
+            0) # Battery Save
+                echo 1600000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null
+                echo 2000000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null
+                echo 2000000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null
+                echo 800000000 > "${DRAM_DF}/min_freq" 2>/dev/null
+                ;;
+            *) # Normal or Performance — use config values
+                for p in 0 4 7; do
+                    mv=$(grep -o "\"cpu_max_${p}\":[0-9]*" "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+                    [ -n "$mv" ] && echo "$mv" > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_max_freq" 2>/dev/null
+                done
+                dm=$(grep -o '"dram_min_freq":[0-9]*' "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+                [ -n "$dm" ] && echo "$dm" > "${DRAM_DF}/min_freq" 2>/dev/null
+                ;;
+        esac
+        log -t "KPM_OC" "Gaming boost OFF: reverted to mode=$pm"
+        BOOSTED=0
+    fi
+    sleep 5
+done
+GDEOF
+chmod 755 "${GAMING_SCRIPT}"
+logi "Gaming monitor script written to ${GAMING_SCRIPT}"
+
 {
     sleep 45
     grep -q "^kpm_oc " /proc/modules 2>/dev/null || exit 0
@@ -290,6 +361,16 @@ fi
         [ -n "${ufs_wb}" ] && echo "${ufs_wb}" > "${UFS_HCI_PATH}/wb_on" 2>/dev/null && \
             logi "UFS Write Booster = ${ufs_wb}"
     fi
+
+    # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────
+    auto_gaming=$(json_int auto_gaming)
+    gaming_apps_str=$(json_str gaming_apps)
+    if [ "${auto_gaming}" = "1" ] && [ -n "${gaming_apps_str}" ]; then
+        # Kill stale daemon if running
+        [ -f "${CONFIG_DIR}/gaming_monitor.pid" ] && kill "$(cat "${CONFIG_DIR}/gaming_monitor.pid" 2>/dev/null)" 2>/dev/null
+        sh "${GAMING_SCRIPT}" &
+        logi "Gaming monitor daemon started (PID $!)"
+    fi
 } &
 
-logi "Service script v7.6 completed. Module loaded."
+logi "Service script v8.0 completed. Module loaded."

@@ -35,6 +35,9 @@
     <button class="tab-btn" data-tab="storage" id="tab-btn-storage">
       <span class="tab-icon">💾</span> Storage
     </button>
+    <button class="tab-btn" data-tab="profile" id="tab-btn-profile">
+      <span class="tab-icon">🎯</span> Profile
+    </button>
   </nav>
 
   <!-- ═══ CPU Tab ═══ -->
@@ -145,6 +148,20 @@
       </button>
     </div>
 
+  </section>
+
+  <!-- ═══ Profile Tab ═══ -->
+  <section class="tab-content" data-tab="profile">
+    <div id="profile-content"></div>
+    <div id="gaming-app-selector"></div>
+    <div class="btn-group" style="margin-bottom:12px">
+      <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" style="flex:1">
+        🔄 Reload
+      </button>
+      <button class="btn btn-primary btn-full" onclick="window.OC.applyAll()" style="flex:2">
+        🚀 Apply Changes
+      </button>
+    </div>
   </section>
 
 </div>
