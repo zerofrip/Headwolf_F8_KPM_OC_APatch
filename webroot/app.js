@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   KPM OC Manager v7.5 — Application Logic
+   KPM OC Manager v7.6 — Application Logic
    Headwolf F8 · Dimensity 8300 (MT8792 / MT6897)
    CPU: CSRAM LUT via kpm_oc.ko (mtk-cpufreq-hw domains)
    GPU: /proc/gpufreqv2 interface

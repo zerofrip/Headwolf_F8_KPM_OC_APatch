@@ -1,10 +1,10 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (service.sh v7.3) providing CPU, GPU, and DRAM overclocking for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v7.6) providing CPU, GPU, DRAM, and Storage overclocking/tuning for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
-- **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`
+- **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`. Live sysfs read — always reflects current CSRAM state without requiring a rescan
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
 - **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
 - **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `mtk_cpufreq_hw_fast_switch` and `mtk_cpufreq_hw_target_index` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
@@ -13,24 +13,26 @@ APatch/KernelSU module (service.sh v7.3) providing CPU, GPU, and DRAM overclocki
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
-- **WebUI** — Browser-based interface for CPU/GPU/RAM OC: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, one-tap apply
-- **Configuration Persistence** — OC params, scaling limits, and DRAM min freq saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
+- **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating)
+- **WebUI** — Browser-based interface with 4 tabs (CPU/GPU/RAM/Storage): add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, one-tap apply
+- **Configuration Persistence** — OC params, scaling limits, DRAM min freq, and I/O/UFS settings saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```text
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v7.2)
-├── service.sh                      # Boot-time service (v7.3)
+├── kpm_oc.ko                       # Compiled kernel module (v7.6)
+├── service.sh                      # Boot-time service (v7.6)
+├── oc_config.default.json          # Default config (seeded on first install)
 └── webroot/
-    ├── index.html                  # WebUI shell (CPU/GPU/RAM tabs)
-    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq)
-    └── style.css                    # Dark glassmorphism design system
+    ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage tabs)
+    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O)
+    └── style.css                   # Dark glassmorphism design system
 ```
 
 ## Boot Flow (`service.sh`)
 
-1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM) and build `insmod` parameter string
+1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM + I/O + UFS) and build `insmod` parameter string
 2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
@@ -42,7 +44,7 @@ APatch/KernelSU module (service.sh v7.3) providing CPU, GPU, and DRAM overclocki
 7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
 8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
 9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
-10. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC, restores `scaling_max_freq`, and re-sets DRAM min freq floor after vendor services have fully initialized
+10. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor, applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) to all UFS block devices, and restores UFS controller settings (Write Booster)
 
 ### Config Persistence
 
@@ -52,15 +54,19 @@ subsequent module updates preserve the user's customized values.
 
 ```json
 {
-  "version": 5,
+  "version": 8,
   "cpu_oc_l_freq": 3800000, "cpu_oc_l_volt": 1050000,
   "cpu_oc_b_freq": 3800000, "cpu_oc_b_volt": 1100000,
   "cpu_oc_p_freq": 3800000, "cpu_oc_p_volt": 1150000,
-  "gpu_oc_freq": 3000000,   "gpu_oc_volt": 105000, "gpu_oc_vsram": 95000,
+  "gpu_oc_freq": 1500000,   "gpu_oc_volt": 105000, "gpu_oc_vsram": 95000,
   "cpu_max_0": 3800000, "cpu_min_0": 480000,
   "cpu_max_4": 3800000, "cpu_min_4": 400000,
   "cpu_max_7": 3800000, "cpu_min_7": 400000,
-  "dram_min_freq": 6400000000
+  "dram_min_freq": 6400000000,
+  "io_read_ahead_kb": 2048, "io_scheduler": "none",
+  "io_nomerges": 0, "io_rq_affinity": 2,
+  "io_iostats": 1, "io_add_random": 0,
+  "ufs_wb_on": 1
 }
 ```
 
@@ -81,7 +87,7 @@ The `kpm_oc.ko` module exposes per-cluster OC params under `/sys/module/kpm_oc/p
 | `cpu_oc_apply` | Write `1` to apply |
 | `cpu_oc_result` | Result string (read-only) |
 
-Applying writes to CSRAM LUT[0] and updates `cpuinfo_max_freq` / `policy->max` so the scheduler and governor can target the new ceiling.
+Applying writes to CSRAM LUT[0] and updates `cpuinfo_max_freq` / `policy->max` so the scheduler and governor can target the new ceiling. The freq_table update always targets index 0 (highest OPP in descending LUT), ensuring correct re-OC after underclock.
 
 ```bash
 echo 3600000 > /sys/module/kpm_oc/parameters/cpu_oc_p_freq
@@ -203,6 +209,31 @@ echo 800000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
 
 > **Note**: Shell redirect (`>`) does not work under APatch su context for devfreq sysfs; use `tee` instead.
 
+## Storage / UFS Tuning
+
+The WebUI's Storage tab provides per-device block queue tuning and UFS controller settings. All settings are persisted in `oc_config.json` and restored on boot via the late-boot relift pass (T+45 s).
+
+### Block Queue Parameters
+
+Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `scheduler` | I/O scheduler (`none` = HW dispatch) | `none` |
+| `read_ahead_kb` | Sequential pre-fetch buffer (KB) | 2048 |
+| `rq_affinity` | Completion CPU affinity (2 = force same CPU) | 2 |
+| `nomerges` | I/O merge policy (0 = merge for best throughput) | 0 |
+| `iostats` | Collect `/proc/diskstats` (0 = less overhead) | 1 |
+| `add_random` | Feed disk timings to `/dev/random` | 0 |
+
+### UFS Controller (ufshcd at 0x11270000)
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `wb_on` | Write Booster — SLC cache for burst writes | 1 (ON) |
+
+> **Note**: `nr_requests` and `scheduler` switching may be limited on hardware-queue UFS devices. `nr_requests` returns EACCES on this device.
+
 ## Control Interfaces
 
 | Action | Interface |
@@ -217,12 +248,15 @@ echo 800000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
 | GPU fixed OPP index | `echo <idx> > /proc/gpufreqv2/fix_target_opp_index` |
 | DRAM min freq floor | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq` |
 | DRAM max freq ceil  | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/max_freq` |
+| I/O read-ahead | `echo <kb> > /sys/block/sd*/queue/read_ahead_kb` |
+| UFS Write Booster | `echo {0,1} > /sys/devices/platform/11270000.ufshci/wb_on` |
 
 ## Data Sources
 
 | Data | Source |
 |------|--------|
-| CPU freq + volt | `kpm_oc.ko` → `opp_table` sysfs |
+| CPU freq + volt | `kpm_oc.ko` → `opp_table` sysfs (live CSRAM read) |
+| CPU raw hex dump | `kpm_oc.ko` → `raw` sysfs (live CSRAM read) |
 | CPU available freqs | `/sys/devices/system/cpu/cpufreq/policy{0,4,7}/scaling_available_frequencies` |
 | GPU freq + volt + vsram | `/proc/gpufreqv2/gpu_working_opp_table` |
 | GPU status | `/proc/gpufreqv2/gpufreq_status` |
@@ -233,6 +267,8 @@ echo 800000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
 | DRAM data rate | `/sys/bus/platform/drivers/dramc_drv/dram_data_rate` |
 | DRAM type | `/sys/bus/platform/drivers/dramc_drv/dram_type` |
 | Vcore voltage | `/sys/class/regulator/regulator.74/microvolts` |
+| Block queue attrs | `/sys/block/sd{a,b,c}/queue/{scheduler,read_ahead_kb,...}` |
+| UFS controller | `/sys/devices/platform/11270000.ufshci/{wb_on,clkgate_enable,...}` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
 
