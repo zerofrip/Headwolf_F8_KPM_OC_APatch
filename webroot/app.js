@@ -1326,7 +1326,7 @@
       const pmM = thermalCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
       const agM = thermalCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
       const gaM = thermalCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
-      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10) || 1;
+      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10);
       if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
       if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
     }
