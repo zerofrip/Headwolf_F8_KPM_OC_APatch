@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v7.6) providing CPU, GPU, DRAM, and Storage overclocking/tuning for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v8.0) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -14,26 +14,29 @@ APatch/KernelSU module (v7.6) providing CPU, GPU, DRAM, and Storage overclocking
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
 - **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating)
-- **WebUI** — Browser-based interface with 4 tabs (CPU/GPU/RAM/Storage): add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, one-tap apply
-- **Configuration Persistence** — OC params, scaling limits, DRAM min freq, and I/O/UFS settings saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
+- **Thermal Mitigation** *(v7.6)* — Per-component thermal controls: CPU trip point raising (Soft +15°C / Hard +30°C + cdev lock), GPU cooling device lock (Soft) and OPP pinning via `fix_target_opp_index` (Hard)
+- **Power Profiles** *(v8.0)* — Three selectable power modes (Battery Save / Normal / Performance) that control CPU scaling limits, DRAM floor, and thermal mitigation as a single preset
+- **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic Performance OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all power modes
+- **WebUI** — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile): add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, one-tap apply
+- **Configuration Persistence** — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```text
 ├── module.prop                     # APatch module metadata
 ├── kpm_oc.ko                       # Compiled kernel module (v7.6)
-├── service.sh                      # Boot-time service (v7.6)
+├── service.sh                      # Boot-time service (v8.0)
 ├── oc_config.default.json          # Default config (seeded on first install)
 └── webroot/
-    ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage tabs)
-    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O)
+    ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile tabs)
+    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O + thermal + gaming)
     └── style.css                   # Dark glassmorphism design system
 ```
 
 ## Boot Flow (`service.sh`)
 
-1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM + I/O + UFS) and build `insmod` parameter string
-2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=3500000 gpu_target_freq=1500000 ...`)
+1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM + I/O + UFS + thermal + gaming) and build `insmod` parameter string
+2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=4000000 gpu_target_freq=1900000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
    - CPU OC auto-applies if any `cpu_oc_*_freq` param is nonzero
@@ -44,7 +47,13 @@ APatch/KernelSU module (v7.6) providing CPU, GPU, DRAM, and Storage overclocking
 7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
 8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
 9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
-10. Launch background late-boot relift at T+45 s — re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor, applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) to all UFS block devices, and restores UFS controller settings (Write Booster)
+10. Write `gaming_monitor.sh` daemon script to `CONFIG_DIR`
+11. Launch background late-boot relift at T+45 s:
+    - Re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor
+    - Applies thermal mitigation (CPU trip point raising + GPU cooling device lock) per saved mode
+    - Applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) to all UFS block devices
+    - Restores UFS controller settings (Write Booster)
+    - Starts `gaming_monitor.sh` daemon if `auto_gaming=1` and gaming apps are configured
 
 ### Config Persistence
 
@@ -54,19 +63,22 @@ subsequent module updates preserve the user's customized values.
 
 ```json
 {
-  "version": 8,
+  "version": 9,
   "cpu_oc_l_freq": 3800000, "cpu_oc_l_volt": 1050000,
   "cpu_oc_b_freq": 3800000, "cpu_oc_b_volt": 1100000,
-  "cpu_oc_p_freq": 3800000, "cpu_oc_p_volt": 1150000,
-  "gpu_oc_freq": 1500000,   "gpu_oc_volt": 105000, "gpu_oc_vsram": 95000,
+  "cpu_oc_p_freq": 4000000, "cpu_oc_p_volt": 1150000,
+  "gpu_oc_freq": 1900000,   "gpu_oc_volt": 115040, "gpu_oc_vsram": 95000,
   "cpu_max_0": 3800000, "cpu_min_0": 480000,
   "cpu_max_4": 3800000, "cpu_min_4": 400000,
-  "cpu_max_7": 3800000, "cpu_min_7": 400000,
+  "cpu_max_7": 4000000, "cpu_min_7": 400000,
   "dram_min_freq": 6400000000,
   "io_read_ahead_kb": 2048, "io_scheduler": "none",
   "io_nomerges": 0, "io_rq_affinity": 2,
   "io_iostats": 1, "io_add_random": 0,
-  "ufs_wb_on": 1
+  "ufs_wb_on": 1,
+  "cpu_thermal_mode": 0, "gpu_thermal_mode": 0,
+  "power_mode": 1,
+  "auto_gaming": 0, "gaming_apps": ""
 }
 ```
 
@@ -209,6 +221,82 @@ echo 800000000 | tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
 
 > **Note**: Shell redirect (`>`) does not work under APatch su context for devfreq sysfs; use `tee` instead.
 
+## Thermal Mitigation
+
+The WebUI's Thermal section (in CPU/GPU cards) provides per-component thermal controls to prevent performance throttling under sustained load.
+
+### CPU Thermal Modes
+
+| Mode | Description |
+|------|-------------|
+| Off (0) | Stock thermal behavior |
+| Soft (1) | Raise all CPU-related thermal zone trip points by +15°C |
+| Hard (2) | Raise trip points by +30°C + lock cpufreq cooling devices to state 0 |
+
+### GPU Thermal Modes
+
+| Mode | Description |
+|------|-------------|
+| Off (0) | Stock thermal behavior |
+| Soft (1) | Lock GPU/Mali/GED cooling devices to state 0 (prevent frequency capping) |
+| Hard (2) | Soft + pin GPU at OPP index 0 via `fix_target_opp_index` |
+
+Settings are persisted in `oc_config.json` (`cpu_thermal_mode`, `gpu_thermal_mode`) and restored on boot via the late-boot relift pass.
+
+## Power Profiles
+
+Three selectable power modes that apply preset CPU scaling limits, DRAM floor, and thermal settings as a single tap.
+
+| Mode | CPU Max (L/B/P) | DRAM Floor | Thermal |
+|------|------------------|------------|---------|
+| 🔋 Battery Save | 1600 / 2000 / 2000 MHz | 800 MHz | Off |
+| ⚡ Normal | As configured | As configured | Off |
+| 🚀 Performance | 3800 / 3800 / 4000 MHz | 6400 MHz | Soft |
+
+- **Battery Save** reduces clock ceilings for maximum battery life. After `Apply Changes`, scaling limits are re-enforced to override the OC values.
+- **Normal** uses the saved OC config values without modification.
+- **Performance** applies maximum OC + thermal mitigation + DRAM at max OPP.
+
+Switching modes updates the UI state immediately; tap **Apply Changes** to activate on hardware.
+
+## Auto Gaming Mode
+
+Automatic Performance OC boost when user-selected apps are in the foreground. Works independently across all power modes.
+
+### How It Works
+
+1. **Select apps** — Profile tab → enable Auto Gaming toggle → "+ Select Apps" to browse installed 3rd-party apps with icons, search, and batch selection
+2. **Apply** — "Apply Changes" saves the config, starts the WebUI foreground monitor (5-second polling), and launches a persistent background daemon
+3. **Auto boost** — When a selected app enters the foreground, Performance preset is applied (max CPU/GPU OC, DRAM 6400 MHz, GPU cdev lock)
+4. **Auto revert** — When the gaming app exits foreground, the current power mode preset is restored
+
+### App Selector
+
+- Lists all installed 3rd-party apps via `pm list packages -3`
+- App labels loaded asynchronously via `dumpsys package` parsing
+- App icons loaded in batches via `cmd package dump-icon` (Android 13+, PNG → base64)
+- Real-time search filter by app name or package name
+- Selected apps shown as chips with mini icons in the profile card
+
+### Monitoring Architecture
+
+| Component | Scope | Method |
+|-----------|-------|--------|
+| WebUI JS polling | While WebUI is open | `setInterval` every 5s, `dumpsys activity` foreground check |
+| `gaming_monitor.sh` daemon | Persistent (survives WebUI close) | Shell loop every 5s, PID file at `CONFIG_DIR/gaming_monitor.pid` |
+
+The daemon is started by `service.sh` on boot (if `auto_gaming=1`) and can be restarted/stopped from the WebUI via `Apply Changes`.
+
+### Foreground Detection
+
+```sh
+# Primary: Activity Manager
+dumpsys activity activities | grep mResumedActivity | head -1 | sed 's|.*u0 ||;s|/.*||'
+
+# Fallback: Window Manager
+dumpsys window | grep mCurrentFocus | tail -1 | sed 's|.*{[^ ]* [^ ]* ||;s|/.*||;s|}.*||'
+```
+
 ## Storage / UFS Tuning
 
 The WebUI's Storage tab provides per-device block queue tuning and UFS controller settings. All settings are persisted in `oc_config.json` and restored on boot via the late-boot relift pass (T+45 s).
@@ -250,6 +338,11 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | DRAM max freq ceil  | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/max_freq` |
 | I/O read-ahead | `echo <kb> > /sys/block/sd*/queue/read_ahead_kb` |
 | UFS Write Booster | `echo {0,1} > /sys/devices/platform/11270000.ufshci/wb_on` |
+| CPU thermal trip raise | Write to `/sys/class/thermal/thermal_zone*/trip_point_*_temp` |
+| GPU cdev lock | `echo 0 > /sys/class/thermal/cooling_device*/cur_state` (gpu/mali types) |
+| GPU OPP pin | `echo 0 > /proc/gpufreqv2/fix_target_opp_index` |
+| Gaming daemon start | `nohup sh <CONFIG_DIR>/gaming_monitor.sh &` |
+| Gaming daemon stop | `kill $(cat <CONFIG_DIR>/gaming_monitor.pid)` |
 
 ## Data Sources
 
@@ -269,6 +362,12 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | Vcore voltage | `/sys/class/regulator/regulator.74/microvolts` |
 | Block queue attrs | `/sys/block/sd{a,b,c}/queue/{scheduler,read_ahead_kb,...}` |
 | UFS controller | `/sys/devices/platform/11270000.ufshci/{wb_on,clkgate_enable,...}` |
+| Thermal zones | `/sys/class/thermal/thermal_zone*/type`, `temp`, `trip_point_*_temp` |
+| Cooling devices | `/sys/class/thermal/cooling_device*/type`, `max_state`, `cur_state` |
+| Installed apps | `pm list packages -3` |
+| App labels | `dumpsys package` (nonLocalizedLabel field) |
+| App icons | `cmd package dump-icon <pkg>` (Android 13+, PNG) |
+| Foreground app | `dumpsys activity activities` / `dumpsys window` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
 
