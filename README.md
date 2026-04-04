@@ -7,28 +7,30 @@ APatch/KernelSU module (v8.0) providing CPU, GPU, DRAM, Storage overclocking/tun
 - **CPU OPP Reader** — Displays per-cluster DVFS data (freq + volt) read from CSRAM via `kpm_oc.ko`. Live sysfs read — always reflects current CSRAM state without requiring a rescan
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
 - **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
-- **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `mtk_cpufreq_hw_fast_switch` and `mtk_cpufreq_hw_target_index` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
-- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; module parameter default is 1450 MHz (overridden by `oc_config.json` on boot)
+- **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `scmi_cpufreq_fast_switch` and `scmi_cpufreq_set_target` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
+- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; module parameter default is 1900 MHz @ 1150.4 mV (overridden by `oc_config.json` on boot)
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
+- **GPU PLL Direct Programming** *(v8.0)* — kretprobe on `gpufreq_commit` reprograms MFG PLL CON1 after GPUEB commits above-stock OC frequency
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
 - **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating)
 - **Thermal Mitigation** *(v7.6)* — Per-component thermal controls: CPU trip point raising (Soft +15°C / Hard +30°C + cdev lock), GPU cooling device lock (Soft) and OPP pinning via `fix_target_opp_index` (Hard)
 - **Power Profiles** *(v8.0)* — Three selectable power modes (Battery Save / Normal / Performance) that control CPU scaling limits, DRAM floor, and thermal mitigation as a single preset
 - **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic Performance OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all power modes
-- **WebUI** — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile): add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, one-tap apply
+- **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile), i18n support (English / 日本語), language switcher in header: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, one-tap apply
 - **Configuration Persistence** — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
 
 ## Structure
 
 ```text
 ├── module.prop                     # APatch module metadata
-├── kpm_oc.ko                       # Compiled kernel module (v7.6)
+├── kpm_oc.ko                       # Compiled kernel module (v8.0)
 ├── service.sh                      # Boot-time service (v8.0)
 ├── oc_config.default.json          # Default config (seeded on first install)
 └── webroot/
     ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile tabs)
+    ├── i18n.js                     # Internationalization module (EN / JA)
     ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O + thermal + gaming)
     └── style.css                   # Dark glassmorphism design system
 ```
@@ -84,6 +86,21 @@ subsequent module updates preserve the user's customized values.
 
 `service.sh` parses this with lightweight `grep` (no `jq` needed) and passes values as `insmod` params.
 
+## Multi-Language Support (i18n)
+
+The WebUI supports multiple languages via a lightweight i18n module (`i18n.js`):
+
+| Language | Code | Flag |
+|----------|------|------|
+| English | `en` | 🇺🇸 |
+| 日本語 | `ja` | 🇯🇵 |
+
+- Language is auto-detected from `navigator.language` on first visit
+- User selection is persisted in `localStorage` (`kpm_oc_lang` key)
+- Language switcher (flag buttons) is displayed in the header
+- All UI strings (labels, tooltips, toast messages, validation errors) are translated
+- Static HTML strings use `data-i18n` attributes; dynamic strings use `I18n.t(key, params)` with `{placeholder}` interpolation
+
 ## CPU Overclocking
 
 The `kpm_oc.ko` module exposes per-cluster OC params under `/sys/module/kpm_oc/parameters/`:
@@ -136,15 +153,17 @@ so GPU power-cycle / runtime table refreshes do not silently drop OC back to sto
 The GPUEB kprobe countermeasure (v7.2) additionally re-patches OPP voltages
 immediately before every GPU DVFS commit, eliminating the window where GPUEB
 could revert the voltage between relift cycles.
-Default target on boot: **1450 MHz @ 87500 (= 875.0 mV)** (bare module parameter default; `oc_config.json` overrides this on boot).
+The kretprobe on `gpufreq_commit` (v8.0) additionally reprograms MFG PLL CON1
+when GPUEB commits an above-stock OC frequency.
+Default target on boot: **1900 MHz @ 115040 (= 1150.4 mV)** (bare module parameter default; `oc_config.json` overrides this on boot).
 
 ```bash
-echo 1467000 > /sys/module/kpm_oc/parameters/gpu_target_freq
-echo   91875 > /sys/module/kpm_oc/parameters/gpu_target_volt
-echo   91875 > /sys/module/kpm_oc/parameters/gpu_target_vsram
+echo 1900000 > /sys/module/kpm_oc/parameters/gpu_target_freq
+echo  115040 > /sys/module/kpm_oc/parameters/gpu_target_volt
+echo   95000 > /sys/module/kpm_oc/parameters/gpu_target_vsram
 echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply
 cat /sys/module/kpm_oc/parameters/gpu_oc_result
-# OK:patched=3,freq=1450000->1467000,...
+# OK:patched=3,freq=1400000->1900000,...
 ```
 
 Notes:
@@ -274,7 +293,7 @@ Automatic Performance OC boost when user-selected apps are in the foreground. Wo
 
 - Lists all installed 3rd-party apps via `pm list packages -3`
 - App labels loaded asynchronously via `dumpsys package` parsing
-- App icons loaded in batches via `cmd package dump-icon` (Android 13+, PNG → base64)
+- App icons loaded in batches via custom DEX-based icon extractor (ActivityThread → getResourcesForApplication → Bitmap → PNG → base64)
 - Real-time search filter by app name or package name
 - Selected apps shown as chips with mini icons in the profile card
 
@@ -366,7 +385,7 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | Cooling devices | `/sys/class/thermal/cooling_device*/type`, `max_state`, `cur_state` |
 | Installed apps | `pm list packages -3` |
 | App labels | `dumpsys package` (nonLocalizedLabel field) |
-| App icons | `cmd package dump-icon <pkg>` (Android 13+, PNG) |
+| App icons | DEX-based icon extractor (ActivityThread → getResourcesForApplication → Bitmap → PNG → base64) |
 | Foreground app | `dumpsys activity activities` / `dumpsys window` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
@@ -383,6 +402,19 @@ For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-ma
 - Android 14, kernel 6.1 GKI
 - APatch or KernelSU with WebUI support
 
+## Author
+
+**zerofrip** — [github.com/zerofrip](https://github.com/zerofrip)
+
 ## License
 
-GPL-2.0
+This project is licensed under **GPL-2.0**.
+
+### Third-Party Licenses
+
+| Component | License |
+|-----------|---------|
+| [Inter](https://github.com/rsms/inter) font | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) font | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+
+Fonts are loaded dynamically from Google Fonts and are not bundled in this repository.

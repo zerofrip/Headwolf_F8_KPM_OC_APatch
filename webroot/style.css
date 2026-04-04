@@ -1177,3 +1177,33 @@ body::before {
 .app-list-empty, .app-list-loading {
   padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.8rem;
 }
+
+/* ─── Language Switcher ────────────────────────────────────────────── */
+.lang-switcher {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lang-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--glass-border);
+  border-radius: 100px;
+  padding: 4px 10px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1;
+}
+
+.lang-btn:hover {
+  background: var(--bg-input-focus);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.lang-btn.active {
+  background: var(--accent-cpu-dim);
+  border-color: var(--accent-cpu);
+  box-shadow: 0 0 8px var(--accent-cpu-glow);
+}

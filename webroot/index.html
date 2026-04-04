@@ -6,6 +6,7 @@
   <title>KPM OC Manager</title>
   <meta name="description" content="Dynamic CPU/GPU Overclock Manager for Headwolf F8 via KPM">
   <link rel="stylesheet" href="style.css">
+  <script src="i18n.js"></script>
 </head>
 <body>
 
@@ -14,29 +15,30 @@
   <!-- ═══ Header ═══ -->
   <header class="header">
     <div class="header-icon">⚡</div>
-    <h1>OC Manager</h1>
-    <p class="subtitle">Headwolf F8 · Dimensity 8300 · v8.0</p>
+    <h1 data-i18n="header.title">OC Manager</h1>
+    <p class="subtitle" data-i18n="header.subtitle">Headwolf F8 · Dimensity 8300 · v8.0</p>
     <div id="module-status" class="status-badge offline">
-      <span class="status-dot"></span> Checking...
+      <span class="status-dot"></span> <span data-i18n="header.checking">Checking...</span>
     </div>
+    <div class="lang-switcher" id="lang-switcher"></div>
   </header>
 
   <!-- ═══ Tab Navigation ═══ -->
   <nav class="tab-nav">
     <button class="tab-btn active" data-tab="cpu" id="tab-btn-cpu">
-      <span class="tab-icon">⚡</span> CPU
+      <span class="tab-icon">⚡</span> <span data-i18n="tab.cpu">CPU</span>
     </button>
     <button class="tab-btn" data-tab="gpu" id="tab-btn-gpu">
-      <span class="tab-icon">🎮</span> GPU
+      <span class="tab-icon">🎮</span> <span data-i18n="tab.gpu">GPU</span>
     </button>
     <button class="tab-btn" data-tab="ram" id="tab-btn-ram">
-      <span class="tab-icon">🧠</span> RAM
+      <span class="tab-icon">🧠</span> <span data-i18n="tab.ram">RAM</span>
     </button>
     <button class="tab-btn" data-tab="storage" id="tab-btn-storage">
-      <span class="tab-icon">💾</span> Storage
+      <span class="tab-icon">💾</span> <span data-i18n="tab.storage">Storage</span>
     </button>
     <button class="tab-btn" data-tab="profile" id="tab-btn-profile">
-      <span class="tab-icon">🎯</span> Profile
+      <span class="tab-icon">🎯</span> <span data-i18n="tab.profile">Profile</span>
     </button>
   </nav>
 
@@ -60,10 +62,10 @@
     <!-- CPU Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-cpu-scan" style="flex:1">
-        🔄 Reload
+        🔄 <span data-i18n="btn.reload">Reload</span>
       </button>
       <button class="btn btn-primary btn-full" onclick="window.OC.applyAll()" id="btn-cpu-apply" style="flex:2">
-        🚀 Apply Changes
+        🚀 <span data-i18n="btn.apply">Apply Changes</span>
       </button>
     </div>
 
@@ -89,10 +91,10 @@
     <!-- GPU Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-gpu-scan" style="flex:1">
-        🔄 Reload
+        🔄 <span data-i18n="btn.reload">Reload</span>
       </button>
       <button class="btn btn-primary gpu-accent btn-full" onclick="window.OC.applyAll()" id="btn-gpu-apply" style="flex:2">
-        🚀 Apply Changes
+        🚀 <span data-i18n="btn.apply">Apply Changes</span>
       </button>
     </div>
 
@@ -115,10 +117,10 @@
     <!-- RAM Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-ram-scan" style="flex:1">
-        🔄 Reload
+        🔄 <span data-i18n="btn.reload">Reload</span>
       </button>
       <button class="btn btn-primary ram-accent btn-full" onclick="window.OC.applyAll()" id="btn-ram-apply" style="flex:2">
-        🚀 Apply Changes
+        🚀 <span data-i18n="btn.apply">Apply Changes</span>
       </button>
     </div>
 
@@ -141,10 +143,10 @@
     <!-- Storage Action Buttons -->
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" id="btn-storage-scan" style="flex:1">
-        🔄 Reload
+        🔄 <span data-i18n="btn.reload">Reload</span>
       </button>
       <button class="btn btn-primary storage-accent btn-full" onclick="window.OC.applyAll()" id="btn-storage-apply" style="flex:2">
-        🚀 Apply Changes
+        🚀 <span data-i18n="btn.apply">Apply Changes</span>
       </button>
     </div>
 
@@ -156,10 +158,10 @@
     <div id="gaming-app-selector"></div>
     <div class="btn-group" style="margin-bottom:12px">
       <button class="btn btn-secondary" onclick="window.OC.scanAndLoad()" style="flex:1">
-        🔄 Reload
+        🔄 <span data-i18n="btn.reload">Reload</span>
       </button>
       <button class="btn btn-primary btn-full" onclick="window.OC.applyAll()" style="flex:2">
-        🚀 Apply Changes
+        🚀 <span data-i18n="btn.apply">Apply Changes</span>
       </button>
     </div>
   </section>

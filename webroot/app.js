@@ -25,14 +25,14 @@
   const IO_READ_AHEAD_OPTIONS = [128, 256, 512, 1024, 2048];
   const IO_SCHEDULER_OPTIONS = ['none', 'mq-deadline', 'kyber', 'bfq'];
   const IO_RQ_AFFINITY_OPTIONS = [
-    { value: 0, label: '0 — None' },
-    { value: 1, label: '1 — CPU group' },
-    { value: 2, label: '2 — Same CPU' },
+    { value: 0, labelKey: 'storage.rqa.none' },
+    { value: 1, labelKey: 'storage.rqa.group' },
+    { value: 2, labelKey: 'storage.rqa.same' },
   ];
   const IO_NOMERGES_OPTIONS = [
-    { value: 0, label: '0 — Merge all' },
-    { value: 1, label: '1 — No front' },
-    { value: 2, label: '2 — No merge' },
+    { value: 0, labelKey: 'storage.nom.merge_all' },
+    { value: 1, labelKey: 'storage.nom.no_front' },
+    { value: 2, labelKey: 'storage.nom.no_merge' },
   ];
   const UFS_HCI_GLOB = '/sys/devices/platform/11270000.ufshci';  // MT6897 primary UFSHCI
 
@@ -40,24 +40,24 @@
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
   const CLUSTER_CORES = { 0: 'Cortex-A520', 4: 'Cortex-A720', 7: 'Cortex-A720' };
 
+  /* i18n shorthand */
+  const t = window.I18n.t;
+
   const POWER_PRESETS = [
     {
-      label: 'Battery Save', icon: '🔋',
-      desc: 'Reduced clocks · max battery life',
+      labelKey: 'preset.battery_save', descKey: 'preset.battery_desc', icon: '🔋',
       cpuMax: { 0: 1600000, 4: 2000000, 7: 2000000 },
       dramMin: 800000000,
       cpuThermal: 0, gpuThermal: 0,
     },
     {
-      label: 'Normal', icon: '⚡',
-      desc: 'OC as configured · balanced',
+      labelKey: 'preset.normal', descKey: 'preset.normal_desc', icon: '⚡',
       cpuMax: null,  // null = use saved config values
       dramMin: null,
       cpuThermal: 0, gpuThermal: 0,
     },
     {
-      label: 'Performance', icon: '🚀',
-      desc: 'Max OC · thermal mitigation · DRAM max',
+      labelKey: 'preset.performance', descKey: 'preset.performance_desc', icon: '🚀set.performance_desc', icon: '🚀',
       cpuMax: { 0: 3800000, 4: 3800000, 7: 4000000 },
       dramMin: 6400000000,
       cpuThermal: 1, gpuThermal: 1,
@@ -433,24 +433,24 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">⚡</span>
-            CPU ${name}
+            ${t('cpu.cluster_title', { name })}
             <span style="font-size:0.75rem;color:var(--text-muted);margin-left:4px">${core}</span>
           </div>
           <div>
-            <span class="card-badge cpu">${entries.length} OPPs</span>
-            <span class="info-chip freq" style="margin-left:4px">Max: ${maxFreqStr}</span>
+            <span class="card-badge cpu">${t('cpu.opps', { n: entries.length })}</span>
+            <span class="info-chip freq" style="margin-left:4px">${t('cpu.max_label', { freq: maxFreqStr })}</span>
           </div>
         </div>
 
         <div class="config-row">
-          <div><div class="config-label">Max Freq</div></div>
+          <div><div class="config-label">${t('cpu.max_freq')}</div></div>
           <select class="config-input freq-limit-select" id="cpu-max-freq-${cluster.id}"
                   data-policy="${cluster.id}" data-type="max">
             ${freqOptions}
           </select>
         </div>
         <div class="config-row">
-          <div><div class="config-label">Min Freq</div></div>
+          <div><div class="config-label">${t('cpu.min_freq')}</div></div>
           <select class="config-input freq-limit-select" id="cpu-min-freq-${cluster.id}"
                   data-policy="${cluster.id}" data-type="min">
             ${freqOptions}
@@ -461,9 +461,9 @@
           <table class="opp-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Freq (MHz)</th>
-                <th>Voltage (µV)</th>
+                <th>${t('cpu.th.index')}</th>
+                <th>${t('cpu.th.freq')}</th>
+                <th>${t('cpu.th.voltage')}</th>
                 <th></th>
                 <th style="width:60px"></th>
               </tr>
@@ -499,8 +499,8 @@
                 </td>
                 <td>
                   <div class="row-actions">
-                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="Restore" onclick="window.OC.restoreRow('CPU', ${cluster.id}, ${idx})">↩</button>` : ''}
-                    <button class="btn-icon danger" title="Remove" onclick="window.OC.removeRow('CPU', ${cluster.id}, ${idx})">✕</button>
+                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="${t('misc.restore')}" onclick="window.OC.restoreRow('CPU', ${cluster.id}, ${idx})">↩</button>` : ''}
+                    <button class="btn-icon danger" title="${t('misc.remove')}" onclick="window.OC.removeRow('CPU', ${cluster.id}, ${idx})">✕</button>
                   </div>
                 </td>
               </tr>`;
@@ -513,15 +513,15 @@
 
         <div id="cpu-add-form-${cluster.id}" class="add-form">
           <div class="add-form-row">
-            <input type="number" class="cell-input" placeholder="Freq (MHz)" id="add-cpu-freq-${cluster.id}">
-            <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-cpu-volt-${cluster.id}">
+            <input type="number" class="cell-input" placeholder="${t('cpu.add_freq_placeholder')}" id="add-cpu-freq-${cluster.id}">
+            <input type="number" class="cell-input" placeholder="${t('cpu.add_volt_placeholder')}" id="add-cpu-volt-${cluster.id}">
             <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('CPU', ${cluster.id})">✓</button>
             <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">✕</button>
           </div>
         </div>
         <div class="btn-group">
           <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('CPU', ${cluster.id})">
-            + Add Entry
+            ${t('btn.add_entry')}
           </button>
         </div>
       </div>`;
@@ -540,11 +540,11 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">🎮</span>
-            GPU · Mali
+            ${t('gpu.title')}
           </div>
           <div>
-            <span class="card-badge gpu">${entries.length} OPPs</span>
-            <span class="info-chip volt" style="margin-left:4px">Max: ${maxFreqStr}</span>
+            <span class="card-badge gpu">${t('cpu.opps', { n: entries.length })}</span>
+            <span class="info-chip volt" style="margin-left:4px">${t('gpu.max_label', { freq: maxFreqStr })}</span>
           </div>
         </div>
 
@@ -552,10 +552,10 @@
           <table class="opp-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Freq (MHz)</th>
-                <th>Voltage (µV)</th>
-                <th>VSRAM (µV)</th>
+                <th>${t('gpu.th.index')}</th>
+                <th>${t('gpu.th.freq')}</th>
+                <th>${t('gpu.th.voltage')}</th>
+                <th>${t('gpu.th.vsram')}</th>
                 <th></th>
                 <th style="width:60px"></th>
               </tr>
@@ -594,8 +594,8 @@
                 </td>
                 <td>
                   <div class="row-actions">
-                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="Restore" onclick="window.OC.restoreRow('GPU', 0, ${idx})">↩</button>` : ''}
-                    <button class="btn-icon danger" title="Remove" onclick="window.OC.removeRow('GPU', 0, ${idx})">✕</button>
+                    ${entry.modified || entry.isNew ? `<button class="btn-icon restore" title="${t('misc.restore')}" onclick="window.OC.restoreRow('GPU', 0, ${idx})">↩</button>` : ''}
+                    <button class="btn-icon danger" title="${t('misc.remove')}" onclick="window.OC.removeRow('GPU', 0, ${idx})">✕</button>
                   </div>
                 </td>
               </tr>`;
@@ -608,15 +608,15 @@
 
         <div id="gpu-add-form-0" class="add-form">
           <div class="add-form-row">
-            <input type="number" class="cell-input" placeholder="Freq (MHz)" id="add-gpu-freq-0">
-            <input type="number" class="cell-input" placeholder="Voltage (µV)" id="add-gpu-volt-0">
+            <input type="number" class="cell-input" placeholder="${t('gpu.add_freq_placeholder')}" id="add-gpu-freq-0">
+            <input type="number" class="cell-input" placeholder="${t('gpu.add_volt_placeholder')}" id="add-gpu-volt-0">
             <button class="btn btn-success btn-sm" onclick="window.OC.confirmAddEntry('GPU', 0)">✓</button>
             <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">✕</button>
           </div>
         </div>
         <div class="btn-group">
           <button class="btn btn-secondary btn-sm" onclick="window.OC.toggleAddForm('GPU', 0)">
-            + Add Entry
+            ${t('btn.add_entry')}
           </button>
         </div>
       </div>`;
@@ -638,10 +638,10 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">🧠</span>
-            DRAM · ${r.dramType || 'LPDDR'}
+            ${t('ram.title', { type: r.dramType || 'LPDDR' })}
           </div>
           <div>
-            <span class="card-badge ram">${r.availableFreqs.length} OPPs</span>
+            <span class="card-badge ram">${t('cpu.opps', { n: r.availableFreqs.length })}</span>
             <span class="info-chip ram" style="margin-left:4px">${r.governor || '—'}</span>
           </div>
         </div>
@@ -649,26 +649,26 @@
         <!-- Status Grid -->
         <div class="ram-status-grid">
           <div class="ram-stat-item">
-            <span class="ram-stat-label">Data Rate</span>
+            <span class="ram-stat-label">${t('ram.data_rate')}</span>
             <span class="ram-stat-value">${r.dataRate > 0 ? r.dataRate + ' MT/s' : '—'}</span>
           </div>
           <div class="ram-stat-item">
-            <span class="ram-stat-label">Vcore</span>
+            <span class="ram-stat-label">${t('ram.vcore')}</span>
             <span class="ram-stat-value">${r.vcoreUv > 0 ? (r.vcoreUv / 1000).toFixed(0) + ' mV' : '—'}</span>
           </div>
           <div class="ram-stat-item">
-            <span class="ram-stat-label">Current Freq</span>
+            <span class="ram-stat-label">${t('ram.current_freq')}</span>
             <span class="ram-stat-value">${r.curFreq > 0 ? formatFreqHz(r.curFreq) : '—'}</span>
           </div>
           <div class="ram-stat-item">
-            <span class="ram-stat-label">Min Floor</span>
+            <span class="ram-stat-label">${t('ram.min_floor')}</span>
             <span class="ram-stat-value ${r.minFreq > r.availableFreqs[0] ? '' : 'muted'}">${r.minFreq > 0 ? formatFreqHz(r.minFreq) : '—'}</span>
           </div>
         </div>
 
         <!-- Min Freq Floor Selector -->
         <div class="config-row">
-          <div><div class="config-label">Min Freq Floor</div></div>
+          <div><div class="config-label">${t('ram.min_freq_floor')}</div></div>
           <select class="config-input freq-limit-select" id="ram-min-freq"
                   onchange="window.OC.onRamMinFreqChange(this)">
             ${freqOptions}
@@ -680,9 +680,9 @@
           <table class="opp-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Frequency</th>
-                <th>Data Rate</th>
+                <th>${t('ram.th.index')}</th>
+                <th>${t('ram.th.frequency')}</th>
+                <th>${t('ram.th.data_rate')}</th>
                 <th></th>
               </tr>
             </thead>
@@ -706,8 +706,8 @@
                 </td>
                 <td><span class="cell-static">${dataRateMts} MT/s</span></td>
                 <td>
-                  ${isCurrent ? '<span class="info-chip ram">Active</span>' : ''}
-                  ${isFloor ? '<span class="info-chip freq">Floor</span>' : ''}
+                  ${isCurrent ? `<span class="info-chip ram">${t('ram.active')}</span>` : ''}
+                  ${isFloor ? `<span class="info-chip freq">${t('ram.floor')}</span>` : ''}
                 </td>
               </tr>`;
     });
@@ -718,8 +718,7 @@
         </div>
 
         <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);line-height:1.4">
-          ℹ️ Min Freq Floor locks DRAM at or above the selected frequency.
-          Vcore voltage is automatically managed by DVFSRC and increases with higher DRAM OPPs.
+          ℹ️ ${t('ram.info_hint')}
         </div>
       </div>`;
 
@@ -745,12 +744,12 @@
 
     /* rq_affinity select */
     const rqaOptions = IO_RQ_AFFINITY_OPTIONS.map(o =>
-      `<option value="${o.value}" ${o.value === s.rqAffinity ? 'selected' : ''}>${o.label}</option>`
+      `<option value="${o.value}" ${o.value === s.rqAffinity ? 'selected' : ''}>${t(o.labelKey)}</option>`
     ).join('');
 
     /* nomerges select */
     const nomOptions = IO_NOMERGES_OPTIONS.map(o =>
-      `<option value="${o.value}" ${o.value === s.nomerges ? 'selected' : ''}>${o.label}</option>`
+      `<option value="${o.value}" ${o.value === s.nomerges ? 'selected' : ''}>${t(o.labelKey)}</option>`
     ).join('');
 
     let html = `
@@ -758,38 +757,38 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">💾</span>
-            UFS · Block Devices
+            ${t('storage.title')}
           </div>
-          <span class="card-badge storage">${s.devices.length} devs</span>
+          <span class="card-badge storage">${t('storage.devs', { n: s.devices.length })}</span>
         </div>
 
         <!-- Status Grid -->
         <div class="storage-status-grid">
           <div class="storage-stat-item">
-            <span class="storage-stat-label">Scheduler</span>
+            <span class="storage-stat-label">${t('storage.scheduler')}</span>
             <span class="storage-stat-value">${rep ? rep.scheduler || '—' : '—'}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">Queue Depth</span>
+            <span class="storage-stat-label">${t('storage.queue_depth')}</span>
             <span class="storage-stat-value muted">${rep ? (rep.nrRequests > 0 ? rep.nrRequests : '—') : '—'}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">Read-Ahead</span>
+            <span class="storage-stat-label">${t('storage.read_ahead')}</span>
             <span class="storage-stat-value">${s.devices.map(d => d.readAheadKb + ' KB').join(' / ')}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">UFS Type</span>
+            <span class="storage-stat-label">${t('storage.ufs_type')}</span>
             <span class="storage-stat-value muted">UFS 3.1</span>
           </div>
         </div>
 
-        <div class="storage-section-label">Block Queue Tuning</div>
+        <div class="storage-section-label">${t('storage.block_queue_tuning')}</div>
 
         <!-- Scheduler Selector -->
         <div class="config-row">
           <div>
-            <div class="config-label">I/O Scheduler</div>
-            <div class="config-hint">Requires elevator; <code>none</code> = HW dispatch (default)</div>
+            <div class="config-label">${t('storage.io_scheduler')}</div>
+            <div class="config-hint">${t('storage.io_scheduler_hint')}</div>
           </div>
           <select class="config-input freq-limit-select" id="storage-scheduler"
                   onchange="window.OC.onStorageSchedulerChange(this)">
@@ -800,8 +799,8 @@
         <!-- Read-Ahead Selector -->
         <div class="config-row">
           <div>
-            <div class="config-label">Read-Ahead (all devs)</div>
-            <div class="config-hint">Sequential pre-fetch buffer. ↑ seq read, ↓ random I/O</div>
+            <div class="config-label">${t('storage.read_ahead_all')}</div>
+            <div class="config-hint">${t('storage.read_ahead_hint')}</div>
           </div>
           <select class="config-input freq-limit-select" id="storage-read-ahead"
                   onchange="window.OC.onStorageReadAheadChange(this)">
@@ -812,8 +811,8 @@
         <!-- rq_affinity Selector -->
         <div class="config-row">
           <div>
-            <div class="config-label">RQ Affinity</div>
-            <div class="config-hint">Completion CPU affinity. 2 = force same CPU (lowest latency)</div>
+            <div class="config-label">${t('storage.rq_affinity')}</div>
+            <div class="config-hint">${t('storage.rq_affinity_hint')}</div>
           </div>
           <select class="config-input freq-limit-select" id="storage-rq-affinity"
                   onchange="window.OC.onStorageFieldChange('rqAffinity', this)">
@@ -824,8 +823,8 @@
         <!-- nomerges Selector -->
         <div class="config-row">
           <div>
-            <div class="config-label">I/O Merges</div>
-            <div class="config-hint">Merge adjacent I/O requests. 0 = merge (best throughput)</div>
+            <div class="config-label">${t('storage.io_merges')}</div>
+            <div class="config-hint">${t('storage.io_merges_hint')}</div>
           </div>
           <select class="config-input freq-limit-select" id="storage-nomerges"
                   onchange="window.OC.onStorageFieldChange('nomerges', this)">
@@ -836,8 +835,8 @@
         <!-- Toggle row: iostats + add_random -->
         <div class="config-row">
           <div>
-            <div class="config-label">I/O Stats</div>
-            <div class="config-hint">Collect /proc/diskstats. Off = less overhead</div>
+            <div class="config-label">${t('storage.io_stats')}</div>
+            <div class="config-hint">${t('storage.io_stats_hint')}</div>
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="storage-iostats" ${s.iostats ? 'checked' : ''}
@@ -847,8 +846,8 @@
         </div>
         <div class="config-row">
           <div>
-            <div class="config-label">Entropy Feed</div>
-            <div class="config-hint">Feed disk timings to /dev/random. Off = less overhead</div>
+            <div class="config-label">${t('storage.entropy_feed')}</div>
+            <div class="config-hint">${t('storage.entropy_feed_hint')}</div>
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="storage-add-random" ${s.addRandom ? 'checked' : ''}
@@ -862,12 +861,12 @@
           <table class="opp-table">
             <thead>
               <tr>
-                <th>Device</th>
-                <th>Sched</th>
-                <th>RA</th>
-                <th>Queue</th>
-                <th>Merge</th>
-                <th>Affin</th>
+                <th>${t('storage.th.device')}</th>
+                <th>${t('storage.th.sched')}</th>
+                <th>${t('storage.th.ra')}</th>
+                <th>${t('storage.th.queue')}</th>
+                <th>${t('storage.th.merge')}</th>
+                <th>${t('storage.th.affin')}</th>
               </tr>
             </thead>
             <tbody>`;
@@ -896,26 +895,26 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">🔧</span>
-            UFS Controller · ufshcd
+            ${t('storage.ufs_controller')}
           </div>
           <span class="card-badge storage">11270000</span>
         </div>
 
         <div class="storage-status-grid">
           <div class="storage-stat-item">
-            <span class="storage-stat-label">Write Booster</span>
-            <span class="storage-stat-value${s.wbOn === 1 ? '' : ' muted'}">${s.wbOn === -1 ? 'N/A' : (s.wbOn ? 'ON' : 'OFF')}</span>
+            <span class="storage-stat-label">${t('storage.write_booster')}</span>
+            <span class="storage-stat-value${s.wbOn === 1 ? '' : ' muted'}">${s.wbOn === -1 ? t('misc.na') : (s.wbOn ? t('misc.on') : t('misc.off'))}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">Clock Gating</span>
-            <span class="storage-stat-value muted">${s.clkgateEnable === -1 ? 'N/A' : (s.clkgateEnable ? 'ON' : 'OFF')}</span>
+            <span class="storage-stat-label">${t('storage.clock_gating')}</span>
+            <span class="storage-stat-value muted">${s.clkgateEnable === -1 ? t('misc.na') : (s.clkgateEnable ? t('misc.on') : t('misc.off'))}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">CLK Gate Delay</span>
+            <span class="storage-stat-label">${t('storage.clk_gate_delay')}</span>
             <span class="storage-stat-value muted">${s.clkgateDelay > 0 ? s.clkgateDelay + ' ms' : '—'}</span>
           </div>
           <div class="storage-stat-item">
-            <span class="storage-stat-label">HCI Address</span>
+            <span class="storage-stat-label">${t('storage.hci_address')}</span>
             <span class="storage-stat-value muted" style="font-size:0.72rem">0x11270000</span>
           </div>
         </div>`;
@@ -924,8 +923,8 @@
       html += `
         <div class="config-row">
           <div>
-            <div class="config-label">Write Booster</div>
-            <div class="config-hint">UFS WB — accelerates burst writes using SLC cache</div>
+            <div class="config-label">${t('storage.write_booster')}</div>
+            <div class="config-hint">${t('storage.wb_hint')}</div>
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="storage-wb-on" ${s.wbOn ? 'checked' : ''}
@@ -937,9 +936,7 @@
 
     html += `
         <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);line-height:1.4">
-          ℹ️ Block queue attrs from kernel ELF analysis (42 attrs, 16 writable).
-          <strong style="color:var(--text-secondary)">nr_requests</strong> requires an active elevator (returns EINVAL with <code>none</code>).
-          Scheduler switch may require kernel support.
+          ℹ️ ${t('storage.info_hint')}
         </div>
       </div>`;
 
@@ -957,8 +954,8 @@
         <div class="power-mode-card ${pm === idx ? 'active' : ''}"
              onclick="window.OC.setPowerMode(${idx})">
           <span class="pm-icon">${preset.icon}</span>
-          <span class="pm-label">${preset.label}</span>
-          <span class="pm-desc">${preset.desc}</span>
+          <span class="pm-label">${t(preset.labelKey)}</span>
+          <span class="pm-desc">${t(preset.descKey)}</span>
         </div>`;
     });
 
@@ -966,11 +963,11 @@
     let statusHtml = '';
     if (ag.enabled) {
       if (ag.boosted) {
-        statusHtml = '<div class="gaming-status boosted">\ud83c\udfae Gaming boost active: ' + ag.activeApp + '</div>';
+        statusHtml = '<div class="gaming-status boosted">' + t('profile.gaming_boost_active', { app: ag.activeApp }) + '</div>';
       } else if (ag.pollTimer) {
-        statusHtml = '<div class="gaming-status monitoring">\ud83d\udc41 Monitoring foreground app...</div>';
+        statusHtml = '<div class="gaming-status monitoring">' + t('profile.monitoring') + '</div>';
       } else {
-        statusHtml = '<div class="gaming-status idle">\u23f8 Auto Gaming enabled \u2014 starts on Apply</div>';
+        statusHtml = '<div class="gaming-status idle">' + t('profile.gaming_idle') + '</div>';
       }
     }
 
@@ -985,23 +982,22 @@
           return '<span class="selected-app-chip" onclick="window.OC.removeGamingApp(\'' + pkg + '\')" title="' + pkg + '">' +
             chipIcon + display + ' <span class="chip-x">\u2715</span></span>';
         }).join('')
-      : '<span style="color:var(--text-muted);font-size:0.78rem">No apps selected</span>';
+      : '<span style="color:var(--text-muted);font-size:0.78rem">' + t('profile.no_apps_selected') + '</span>';
 
     return `
       <div class="card">
         <div class="card-header">
           <div class="card-title">
             <span class="icon">\ud83c\udfaf</span>
-            Power Mode
+            ${t('profile.power_mode')}
           </div>
-          <span class="card-badge cpu">${POWER_PRESETS[pm].label}</span>
+          <span class="card-badge cpu">${t(POWER_PRESETS[pm].labelKey)}</span>
         </div>
         <div class="power-mode-grid">
           ${modeCards}
         </div>
         <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
-          \u26a0 Switching mode updates CPU scaling limits, DRAM floor, and thermal settings.
-          Tap <strong>Apply Changes</strong> to activate.
+          ${t('profile.mode_warning')}
         </div>
       </div>
 
@@ -1009,7 +1005,7 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">\ud83c\udfae</span>
-            Auto Gaming Mode
+            ${t('profile.auto_gaming')}
           </div>
           <label class="toggle-switch">
             <input type="checkbox" ${ag.enabled ? 'checked' : ''}
@@ -1019,17 +1015,16 @@
         </div>
         ${statusHtml}
         <div style="padding:0 0 8px;font-size:0.75rem;color:var(--text-secondary);line-height:1.5">
-          Selected apps automatically trigger Performance OC when in foreground.
-          Works across all power modes. A background daemon keeps monitoring after WebUI closes.
+          ${t('profile.gaming_desc')}
         </div>
         <div style="margin-bottom:8px">
-          <div class="config-label" style="margin-bottom:6px">Gaming Apps (${ag.apps.length})</div>
+          <div class="config-label" style="margin-bottom:6px">${t('profile.gaming_apps', { n: ag.apps.length })}</div>
           <div class="selected-apps">${chips}</div>
         </div>
         ${ag.enabled ? `
           <button class="btn btn-secondary btn-sm" style="width:100%"
                   onclick="window.OC.showAppSelector()">
-            + Select Apps
+            ${t('btn.select_apps')}
           </button>
         ` : ''}
       </div>`;
@@ -1047,9 +1042,9 @@
 
     let listHtml = '';
     if (ag.loading) {
-      listHtml = '<div class="app-list-loading">Loading installed apps...</div>';
+      listHtml = '<div class="app-list-loading">' + t('profile.loading_apps') + '</div>';
     } else if (filtered.length === 0) {
-      listHtml = '<div class="app-list-empty">No apps found</div>';
+      listHtml = '<div class="app-list-empty">' + t('profile.no_apps_found') + '</div>';
     } else {
       listHtml = filtered.map(function(a) {
         const sel = ag.apps.includes(a.pkg);
@@ -1073,15 +1068,15 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">\ud83d\udcf1</span>
-            Installed Apps
+            ${t('profile.installed_apps')}
           </div>
           <button class="btn btn-secondary btn-sm" style="padding:4px 10px"
-                  onclick="window.OC.hideAppSelector()">\u2715 Close</button>
+                  onclick="window.OC.hideAppSelector()">\u2715 ${t('btn.close')}</button>
         </div>
         <div class="app-search-wrap">
           <span class="app-search-icon">\ud83d\udd0d</span>
           <input type="text" class="app-search-input"
-                 placeholder="Search apps..."
+                 placeholder="${t('profile.search_apps')}"
                  value="${ag._searchQuery || ''}"
                  oninput="window.OC.filterApps(this.value)">
         </div>
@@ -1089,7 +1084,7 @@
           ${listHtml}
         </div>
         <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted)">
-          ${ag.allApps.length} apps \u00b7 ${ag.apps.length} selected
+          ${t('profile.apps_count', { total: ag.allApps.length, selected: ag.apps.length })}
         </div>
       </div>`;
   }
@@ -1111,23 +1106,19 @@
             : v >= 70 ? 'border-color:#f59e0b;color:#f59e0b' : '';
           return `<span class="info-chip ${accentClass}"${extraStyle ? ` style="${extraStyle}"` : ''}>${name}:${v}°C</span>`;
         }).join('')
-      : `<span style="color:var(--text-muted);font-size:0.75rem">Tap ↻ to read temperatures</span>`;
+      : `<span style="color:var(--text-muted);font-size:0.75rem">${t('thermal.tap_refresh')}</span>`;
 
     const modeDescs = [
-      'Normal — standard kernel thermal management',
-      isGpu
-        ? 'Soft — GPU devfreq cooling device locked to state 0 (prevents GPUEB throttle injection)'
-        : 'Soft — re-applies KPM OC freq_qos limits; kprobe already intercepts thermal freq reductions',
-      isGpu
-        ? 'Hard — GPU pinned at max OPP (1900 MHz) via GPUEB fix_target; no DVFS during benchmark'
-        : 'Hard — re-applies OC limits and tries to lock CPU thermal cooling states to 0',
+      t(isGpu ? 'thermal.gpu_desc_off' : 'thermal.cpu_desc_off'),
+      t(isGpu ? 'thermal.gpu_desc_soft' : 'thermal.cpu_desc_soft'),
+      t(isGpu ? 'thermal.gpu_desc_hard' : 'thermal.cpu_desc_hard'),
     ];
 
     const gpuFixBanner = isGpu && state.thermal.gpuFixActive
       ? `<div style="margin-bottom:8px;padding:5px 10px;font-size:0.72rem;` +
         `background:rgba(139,92,246,0.12);border-left:3px solid var(--gpu-accent,#8b5cf6);` +
         `border-radius:0 6px 6px 0;color:var(--gpu-accent,#8b5cf6)">` +
-        `⚠ GPU OPP pinned at 1900 MHz — set Off and Apply Changes to release DVFS.</div>`
+        `${t('thermal.gpu_fix_banner')}</div>`
       : '';
 
     return `
@@ -1135,11 +1126,11 @@
         <div class="card-header">
           <div class="card-title">
             <span class="icon">🌡</span>
-            Thermal Mitigation
-            <span class="card-badge ${accentClass}" style="margin-left:6px">${['Off','Soft','Hard'][mode] || 'Off'}</span>
+            ${t('thermal.title')}
+            <span class="card-badge ${accentClass}" style="margin-left:6px">${[t('thermal.off'),t('thermal.soft'),t('thermal.hard')][mode] || t('thermal.off')}</span>
           </div>
           <button class="btn btn-secondary btn-sm" style="padding:4px 10px"
-                  onclick="window.OC.refreshTemps()">↻ Temps</button>
+                  onclick="window.OC.refreshTemps()">${t('btn.refresh_temps')}</button>
         </div>
 
         <div style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;margin-bottom:10px">
@@ -1150,22 +1141,19 @@
 
         <div class="config-row">
           <div>
-            <div class="config-label">Throttle Mode</div>
+            <div class="config-label">${t('thermal.throttle_mode')}</div>
             <div class="config-hint">${modeDescs[mode] || modeDescs[0]}</div>
           </div>
           <select class="config-input freq-limit-select" style="min-width:88px"
                   onchange="window.OC.setThermalMode('${type}', +this.value)">
-            <option value="0" ${mode === 0 ? 'selected' : ''}>Off</option>
-            <option value="1" ${mode === 1 ? 'selected' : ''}>Soft</option>
-            <option value="2" ${mode === 2 ? 'selected' : ''}>Hard</option>
+            <option value="0" ${mode === 0 ? 'selected' : ''}>${t('thermal.off')}</option>
+            <option value="1" ${mode === 1 ? 'selected' : ''}>${t('thermal.soft')}</option>
+            <option value="2" ${mode === 2 ? 'selected' : ''}>${t('thermal.hard')}</option>
           </select>
         </div>
 
         <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
-          ${isGpu
-            ? '🔒 Soft: locks GPU devfreq cooling device to state 0 — prevents GPUEB thermal throttle injection. Hard: additionally pins GPU at OPP0 (1900 MHz) bypassing all DVFS. Use Hard for benchmarks; disable with Off + Apply to restore.'
-            : '🔒 On this device, KPM OC\'s freq_qos kprobe already intercepts thermal freq reductions. Soft/Hard re-apply OC limits and attempt to lock CPU cooling states. Reboot restores kernel defaults.'
-          }
+          ${t(isGpu ? 'thermal.gpu_info' : 'thermal.cpu_info')}
         </div>
       </div>`;
   }
@@ -1179,7 +1167,7 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">⚡</div>
-              <p>No CPU data loaded.<br>Tap "Reload" to read OPP tables.</p>
+              <p>${t('cpu.no_data')}<br>${t('cpu.no_data_hint')}</p>
             </div>
           </div>`;
       } else {
@@ -1200,7 +1188,7 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">🎮</div>
-              <p>No GPU data loaded.<br>Tap "Reload" to read OPP tables.</p>
+              <p>${t('gpu.no_data')}<br>${t('gpu.no_data_hint')}</p>
             </div>
           </div>`;
       } else {
@@ -1220,7 +1208,7 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">🧠</div>
-              <p>No RAM data loaded.<br>Tap "Reload" to read DRAM info.</p>
+              <p>${t('ram.no_data')}<br>${t('ram.no_data_hint')}</p>
             </div>
           </div>`;
       } else {
@@ -1235,7 +1223,7 @@
           <div class="card">
             <div class="empty-state">
               <div class="icon">💾</div>
-              <p>No storage data loaded.<br>Tap "Reload" to read block device info.</p>
+              <p>${t('storage.no_data')}<br>${t('storage.no_data_hint')}</p>
             </div>
           </div>`;
       } else {
@@ -1250,7 +1238,7 @@
 
   /* ─── Data Loading ────────────────────────────────────────────────── */
   async function loadData() {
-    showToast('Loading OPP data...', 'info');
+    showToast(t('toast.loading'), 'info');
 
     const modCheck = await exec(`lsmod 2>/dev/null | grep kpm_oc`);
     state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.includes('kpm_oc');
@@ -1364,7 +1352,7 @@
 
     renderAll();
     const cpuCount = state.cpuClusters.reduce((s, c) => s + c.entries.length, 0);
-    showToast(`Loaded: CPU ${cpuCount} OPPs, GPU ${state.gpuEntries.length} OPPs, RAM ${ramFreqs.length} OPPs`, 'success');
+    showToast(t('toast.loaded', { cpu: cpuCount, gpu: state.gpuEntries.length, ram: ramFreqs.length }), 'success');
   }
 
   /* ─── Storage Data Loading ────────────────────────────────────────── */
@@ -1454,10 +1442,10 @@
     if (!badge) return;
     if (state.moduleLoaded) {
       badge.className = 'status-badge online';
-      badge.innerHTML = '<span class="status-dot"></span> Module Active';
+      badge.innerHTML = '<span class="status-dot"></span> ' + t('header.module_active');
     } else {
       badge.className = 'status-badge offline';
-      badge.innerHTML = '<span class="status-dot"></span> Module Not Loaded';
+      badge.innerHTML = '<span class="status-dot"></span> ' + t('header.module_not_loaded');
     }
   }
 
@@ -1539,7 +1527,7 @@
     } else {
       // Re-trigger KPM OC relift — freq_qos kprobe already intercepts thermal reductions
       await exec('echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null');
-      msgs.push('CPU OC re-stamped');
+      msgs.push(t('thermal.cpu_restamped'));
       // Best-effort trip point raise (writable on some kernels)
       const delta = cpuMode === 1 ? 15000 : 30000;
       const raiseCmd =
@@ -1558,7 +1546,7 @@
           ' case "$type" in *cpufreq*|*cpu-freq*|*cpu_freq*)' +
           ' echo 0 > "${cd}cur_state" 2>/dev/null;; esac; done';
         await exec(lockCmd);
-        msgs.push('+cooling locked');
+        msgs.push(t('thermal.cooling_locked'));
       }
     }
 
@@ -1568,7 +1556,7 @@
       if (state.thermal.gpuFixActive) {
         await exec('echo -1 > /proc/gpufreqv2/fix_target_opp_index 2>/dev/null');
         state.thermal.gpuFixActive = false;
-        msgs.push('GPU pin released');
+        msgs.push(t('thermal.gpu_pin_released'));
       }
     } else {
       // Lock GPU cooling devices to state 0
@@ -1578,15 +1566,15 @@
         ' case "$type" in *gpu*|*GPU*|*mali*|*Mali*|*GED*)' +
         ' echo 0 > "${cd}cur_state" 2>/dev/null;; esac; done';
       await exec(gpuLockCmd);
-      msgs.push('GPU cdevs locked');
+      msgs.push(t('thermal.gpu_cdevs_locked'));
       if (gpuMode >= 2 && !state.thermal.gpuFixActive) {
         await exec('echo 0 > /proc/gpufreqv2/fix_target_opp_index 2>/dev/null');
         state.thermal.gpuFixActive = true;
-        msgs.push('GPU OPP pinned at 1900 MHz');
+        msgs.push(t('thermal.gpu_opp_pinned'));
       }
     }
 
-    if (msgs.length > 0) showToast('Thermal: ' + msgs.join(', '), 'success');
+    if (msgs.length > 0) showToast(t('thermal.toast', { details: msgs.join(', ') }), 'success');
 
     const cpuEl = document.getElementById('cpu-thermal-card');
     if (cpuEl) cpuEl.innerHTML = renderThermalCard('cpu');
@@ -1811,13 +1799,13 @@
     const isGaming = fgPkg && ag.apps.includes(fgPkg);
     if (isGaming && !ag.boosted) {
       ag.boosted = true;
-      showToast('\ud83c\udfae Gaming boost: ' + fgPkg, 'success');
+      showToast(t('toast.gaming_boost_on', { app: fgPkg }), 'success');
       await applyPowerModeQuick(2);
       const el = document.getElementById('profile-content');
       if (el) el.innerHTML = renderProfileContent();
     } else if (!isGaming && ag.boosted) {
       ag.boosted = false;
-      showToast('Gaming boost off \u2014 reverting', 'info');
+      showToast(t('toast.gaming_boost_off'), 'info');
       await applyPowerModeQuick(state.profile.powerMode);
       const el = document.getElementById('profile-content');
       if (el) el.innerHTML = renderProfileContent();
@@ -1842,7 +1830,7 @@
 
   /* ─── Scan & Reload ───────────────────────────────────────────────── */
   async function scanAndLoad() {
-    showToast('Reloading OPP data...', 'info');
+    showToast(t('toast.reloading'), 'info');
     if (state.moduleLoaded) {
       await reliftCpuConstraintsIfNeeded();
       await reliftGpuConstraintsIfNeeded();
@@ -1864,14 +1852,14 @@
     let newValue = parseInt(input.value, 10);
 
     if (isNaN(newValue) || newValue < 0) {
-      showToast('Invalid value', 'error');
+      showToast(t('toast.invalid_value'), 'error');
       return;
     }
 
     /* freq inputs display MHz — convert to KHz for internal state */
     if (field === 'freq' && isMhz) {
       if (newValue > 10000) {
-        showToast('MHz単位で入力してください（例: 3500）', 'error');
+        showToast(t('cpu.mhz_input_error'), 'error');
         return;
       }
       newValue = newValue * 1000;
@@ -1933,9 +1921,9 @@
     let freq = parseInt(freqInput.value, 10);
     const volt = parseInt(voltInput.value, 10);
 
-    if (isNaN(freq) || freq <= 0) { showToast('Invalid frequency', 'error'); return; }
-    if (isNaN(volt) || volt <= 0) { showToast('Invalid voltage', 'error'); return; }
-    if (freq > 10000) { showToast('MHz単位で入力してください（例: 3500）', 'error'); return; }
+    if (isNaN(freq) || freq <= 0) { showToast(t('toast.invalid_freq'), 'error'); return; }
+    if (isNaN(volt) || volt <= 0) { showToast(t('toast.invalid_volt'), 'error'); return; }
+    if (freq > 10000) { showToast(t('cpu.mhz_input_error'), 'error'); return; }
 
     /* Input is in MHz — convert to KHz for internal state */
     freq = freq * 1000;
@@ -1968,7 +1956,7 @@
     voltInput.value = '';
     toggleAddForm(type, clusterId);
     renderAll();
-    showToast(`New ${type} OPP added (${formatFreqKHz(freq)})`, 'success');
+    showToast(t(type === 'CPU' ? 'cpu.opp_added' : 'gpu.opp_added', { freq: formatFreqKHz(freq) }), 'success');
   }
 
   function removeRow(type, clusterId, idx) {
@@ -2023,7 +2011,7 @@
     const res = await exec(cmd);
     if (res.errno !== 0) {
       console.error(`[OC] ${label} FAILED (errno=${res.errno}): ${res.stderr}`);
-      showToast(`Error: ${label} — ${res.stderr || 'errno=' + res.errno}`, 'error');
+      showToast(t('toast.error', { label, err: res.stderr || 'errno=' + res.errno }), 'error');
     }
     return res;
   }
@@ -2107,7 +2095,7 @@
 
   /* ─── Apply All Changes ───────────────────────────────────────────── */
   async function applyAll() {
-    showToast('Applying changes...', 'info');
+    showToast(t('toast.applying'), 'info');
     let anyOcApplied = false;
 
     /* --- CPU OC: detect entries above stock max, apply via kpm_oc --- */
@@ -2296,7 +2284,7 @@
         showToast(`DRAM min floor → ${formatFreqHz(ramMinTarget)}`, 'success');
         renderAll();
       } else {
-        showToast(`DRAM min_freq write failed: ${ramRes.stderr}`, 'error');
+        showToast(t('ram.dram_min_fail', { err: ramRes.stderr }), 'error');
       }
       anyOcApplied = true;
     }
@@ -2360,7 +2348,7 @@
         await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
       }
 
-      showToast(`Storage: RA=${sto.readAheadKb}K sched=${sto.scheduler} rqa=${sto.rqAffinity} nom=${sto.nomerges}${sto.wbOn >= 0 ? ' WB=' + (sto.wbOn ? 'ON' : 'OFF') : ''}`, 'success');
+      showToast(t('storage.toast', { ra: sto.readAheadKb, sched: sto.scheduler, rqa: sto.rqAffinity, nom: sto.nomerges }) + (sto.wbOn >= 0 ? ' WB=' + (sto.wbOn ? 'ON' : 'OFF') : ''), 'success');
       renderAll();
     }
 
@@ -2398,9 +2386,9 @@
         cpuVoltRes.stdout.trim(),
         gpuVoltRes.stdout.trim(),
       ].filter(s => s && s !== 'NOOP' && s !== '(null)').join(' | ');
-      showToast(`Applied & saved! ${details}`, 'success');
+      showToast(t('toast.applied_saved', { details }), 'success');
     } else {
-      showToast('Settings saved!', 'success');
+      showToast(t('toast.saved'), 'success');
     }
   }
 
@@ -2496,6 +2484,8 @@
     removeGamingApp,
     startGamingMonitor,
     stopGamingMonitor,
+    /* i18n */
+    setLang,
     /* Diagnostic: run from browser console via OC.diagExec() */
     diagExec: async () => {
       const r = await exec('id -Z && cat /proc/self/attr/current && echo "---" && echo test_write > /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1; echo "exit=$?" && cat /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1');
@@ -2507,7 +2497,40 @@
   };
 
   /* ─── Init ────────────────────────────────────────────────────────── */
+  /* ─── i18n: Update static data-i18n elements ─────────────────────── */
+  function updateStaticI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      if (key) el.textContent = t(key);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      const key = el.getAttribute('data-i18n-placeholder');
+      if (key) el.placeholder = t(key);
+    });
+  }
+
+  /* ─── Language Switcher ─────────────────────────────────────────── */
+  function renderLangSwitcher() {
+    const container = document.getElementById('lang-switcher');
+    if (!container) return;
+    const langs = window.I18n.getAvailableLanguages();
+    const current = window.I18n.getLanguage();
+    container.innerHTML = langs.map(l =>
+      `<button class="lang-btn ${l.code === current ? 'active' : ''}" onclick="window.OC.setLang('${l.code}')">${l.flag}</button>`
+    ).join('');
+  }
+
+  function setLang(code) {
+    window.I18n.setLanguage(code);
+    updateStaticI18n();
+    renderLangSwitcher();
+    updateModuleStatus();
+    renderAll();
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
+    updateStaticI18n();
+    renderLangSwitcher();
     initTabs();
     loadData();
     loadStorageData().then(() => renderAll());
