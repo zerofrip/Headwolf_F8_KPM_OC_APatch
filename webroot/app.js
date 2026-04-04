@@ -74,6 +74,13 @@
       clkgateDelay: 0,   // Clock gating delay (ms)
       ufsHciPath: '',    // resolved ufshci sysfs path
     },
+    thermal: {
+      cpuMode: 0,       // 0=off, 1=soft (trip +15°C), 2=hard (trip +30°C + lock cdevs)
+      gpuMode: 0,       // 0=off, 1=soft (lock GPU cdevs), 2=hard (pin OPP0 via fix_target)
+      temps: {},        // { zone_type_string: temp_celsius }
+      gpuFixActive: false,    // true when fix_target_opp_index=0 is held
+      cpuOrigTrips: [], // [{path, origTemp}] — captured on first loadThermalData for undo
+    },
   };
 
   /* ─── Shell Command Execution ─────────────────────────────────────── */
@@ -193,6 +200,21 @@
     }
     if (cmd.includes('11270000.ufshci')) {
       return { errno: 0, stdout: '/sys/devices/platform/11270000.ufshci', stderr: '' };
+    }
+    if (cmd.includes('thermal_zone') || cmd.includes('/thermal/')) {
+      return {
+        errno: 0,
+        stdout: [
+          'Z|cpu-thermal|62000',
+          'Z|mtk-cpu-tz|68000',
+          'Z|gpu-thermal|55000',
+          'Z|battery-thermal|34000',
+          'T|/sys/class/thermal/thermal_zone0/trip_point_0_temp|85000',
+          'T|/sys/class/thermal/thermal_zone0/trip_point_1_temp|95000',
+          'T|/sys/class/thermal/thermal_zone0/trip_point_2_temp|100000',
+        ].join('\n'),
+        stderr: '',
+      };
     }
     return { errno: 0, stdout: '', stderr: '' };
   }
@@ -864,6 +886,82 @@
     return html;
   }
 
+  /* ─── Render Thermal Mitigation Card ─────────────────────────────── */
+  function renderThermalCard(type) {
+    const isGpu = type === 'gpu';
+    const mode = isGpu ? state.thermal.gpuMode : state.thermal.cpuMode;
+    const accentClass = isGpu ? 'gpu' : 'cpu';
+
+    const relevantTemps = Object.entries(state.thermal.temps)
+      .filter(([k]) => isGpu ? /gpu|mali/i.test(k) : !/gpu|mali/i.test(k));
+
+    const tempChips = relevantTemps.length > 0
+      ? relevantTemps.map(([k, v]) => {
+          const name = k.replace(/mtk-|-thermal|-tz|_thermal/g, '').slice(0, 12) || k.slice(0, 12);
+          const extraStyle = v >= 85
+            ? 'border-color:var(--danger,#ef4444);color:var(--danger,#ef4444)'
+            : v >= 70 ? 'border-color:#f59e0b;color:#f59e0b' : '';
+          return `<span class="info-chip ${accentClass}"${extraStyle ? ` style="${extraStyle}"` : ''}>${name}:${v}°C</span>`;
+        }).join('')
+      : `<span style="color:var(--text-muted);font-size:0.75rem">Tap ↻ to read temperatures</span>`;
+
+    const modeDescs = [
+      'Normal — standard kernel thermal management',
+      isGpu
+        ? 'Soft — GPU devfreq cooling device locked to state 0 (prevents GPUEB throttle injection)'
+        : 'Soft — re-applies KPM OC freq_qos limits; kprobe already intercepts thermal freq reductions',
+      isGpu
+        ? 'Hard — GPU pinned at max OPP (1900 MHz) via GPUEB fix_target; no DVFS during benchmark'
+        : 'Hard — re-applies OC limits and tries to lock CPU thermal cooling states to 0',
+    ];
+
+    const gpuFixBanner = isGpu && state.thermal.gpuFixActive
+      ? `<div style="margin-bottom:8px;padding:5px 10px;font-size:0.72rem;` +
+        `background:rgba(139,92,246,0.12);border-left:3px solid var(--gpu-accent,#8b5cf6);` +
+        `border-radius:0 6px 6px 0;color:var(--gpu-accent,#8b5cf6)">` +
+        `⚠ GPU OPP pinned at 1900 MHz — set Off and Apply Changes to release DVFS.</div>`
+      : '';
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🌡</span>
+            Thermal Mitigation
+            <span class="card-badge ${accentClass}" style="margin-left:6px">${['Off','Soft','Hard'][mode] || 'Off'}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="padding:4px 10px"
+                  onclick="window.OC.refreshTemps()">↻ Temps</button>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;margin-bottom:10px">
+          ${tempChips}
+        </div>
+
+        ${gpuFixBanner}
+
+        <div class="config-row">
+          <div>
+            <div class="config-label">Throttle Mode</div>
+            <div class="config-hint">${modeDescs[mode] || modeDescs[0]}</div>
+          </div>
+          <select class="config-input freq-limit-select" style="min-width:88px"
+                  onchange="window.OC.setThermalMode('${type}', +this.value)">
+            <option value="0" ${mode === 0 ? 'selected' : ''}>Off</option>
+            <option value="1" ${mode === 1 ? 'selected' : ''}>Soft</option>
+            <option value="2" ${mode === 2 ? 'selected' : ''}>Hard</option>
+          </select>
+        </div>
+
+        <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
+          ${isGpu
+            ? '🔒 Soft: locks GPU devfreq cooling device to state 0 — prevents GPUEB thermal throttle injection. Hard: additionally pins GPU at OPP0 (1900 MHz) bypassing all DVFS. Use Hard for benchmarks; disable with Off + Apply to restore.'
+            : '🔒 On this device, KPM OC\'s freq_qos kprobe already intercepts thermal freq reductions. Soft/Hard re-apply OC limits and attempt to lock CPU cooling states. Reboot restores kernel defaults.'
+          }
+        </div>
+      </div>`;
+  }
+
   /* ─── Render All ──────────────────────────────────────────────────── */
   function renderAll() {
     const cpuContainer = document.getElementById('cpu-clusters');
@@ -902,9 +1000,14 @@
       }
     }
 
+    // Thermal mitigation cards (CPU tab + GPU tab)
+    const cpuThermalEl = document.getElementById('cpu-thermal-card');
+    if (cpuThermalEl) cpuThermalEl.innerHTML = renderThermalCard('cpu');
+    const gpuThermalEl = document.getElementById('gpu-thermal-card');
+    if (gpuThermalEl) gpuThermalEl.innerHTML = renderThermalCard('gpu');
+
     const ramContainer = document.getElementById('ram-devices');
-    if (ramContainer) {
-      if (state.ram.availableFreqs.length === 0) {
+    if (ramContainer) {      if (state.ram.availableFreqs.length === 0) {
         ramContainer.innerHTML = `
           <div class="card">
             <div class="empty-state">
@@ -996,6 +1099,17 @@
 
     state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
     state.originalGpu = JSON.parse(JSON.stringify(state.gpuEntries));
+
+    // --- Thermal Data ---
+    await loadThermalData();
+    // Read saved thermal modes from config
+    const thermalCfgRes = await exec(`cat ${CONFIG_FILE} 2>/dev/null`);
+    if (thermalCfgRes.stdout) {
+      const cpuTM = thermalCfgRes.stdout.match(/"cpu_thermal_mode"\s*:\s*(\d+)/);
+      const gpuTM = thermalCfgRes.stdout.match(/"gpu_thermal_mode"\s*:\s*(\d+)/);
+      if (cpuTM) state.thermal.cpuMode = parseInt(cpuTM[1], 10) || 0;
+      if (gpuTM) state.thermal.gpuMode = parseInt(gpuTM[1], 10) || 0;
+    }
 
     // --- RAM Data ---
     const ramAvailRes = await exec(`cat ${DRAM_DEVFREQ}/available_frequencies 2>/dev/null`);
@@ -1125,6 +1239,139 @@
       badge.className = 'status-badge offline';
       badge.innerHTML = '<span class="status-dot"></span> Module Not Loaded';
     }
+  }
+
+  /* ─── Thermal Data Loading ────────────────────────────────────────── */
+  async function loadThermalData() {
+    // Use string concatenation to avoid JS template-literal ${} interpolation conflicts
+    const cmd =
+      'for f in /sys/class/thermal/thermal_zone*/; do' +
+      ' type=$(cat "${f}type" 2>/dev/null); temp=$(cat "${f}temp" 2>/dev/null);' +
+      ' case "$type" in *cpu*|*CPU*|*gpu*|*GPU*|*mali*|*batt*|*soc*|*skin*)' +
+      ' echo "Z|${type}|${temp:-0}";; esac; done;' +
+      ' for f in /sys/class/thermal/thermal_zone*/; do' +
+      ' type=$(cat "${f}type" 2>/dev/null);' +
+      ' case "$type" in *cpu*|*CPU*|*mtk*|*soc*|*skin*)' +
+      ' for tp in "${f}"trip_point_*_temp; do' +
+      ' [ -f "$tp" ] && t=$(cat "$tp" 2>/dev/null) && echo "T|${tp}|${t:-0}";' +
+      ' done;; esac; done';
+    const r = await exec(cmd);
+    const temps = {};
+    const trips = [];
+    for (const line of r.stdout.split('\n')) {
+      if (!line.trim()) continue;
+      const p = line.split('|');
+      if (p[0] === 'Z' && p.length >= 3) {
+        temps[p[1]] = Math.round(parseInt(p[2], 10) / 1000);
+      } else if (p[0] === 'T' && p.length >= 3) {
+        trips.push({ path: p[1], origTemp: parseInt(p[2], 10) || 0 });
+      }
+    }
+    state.thermal.temps = temps;
+    // Store originals only once (before any modification)
+    if (state.thermal.cpuOrigTrips.length === 0 && trips.length > 0) {
+      state.thermal.cpuOrigTrips = trips;
+    }
+  }
+
+  /* ─── Refresh Temps (no trip re-read, faster) ─────────────────────── */
+  async function refreshTemps() {
+    const cmd =
+      'for f in /sys/class/thermal/thermal_zone*/; do' +
+      ' type=$(cat "${f}type" 2>/dev/null); temp=$(cat "${f}temp" 2>/dev/null);' +
+      ' case "$type" in *cpu*|*CPU*|*gpu*|*GPU*|*mali*|*batt*|*soc*|*skin*)' +
+      ' echo "Z|${type}|${temp:-0}";; esac; done';
+    const r = await exec(cmd);
+    for (const line of r.stdout.split('\n')) {
+      const p = line.split('|');
+      if (p[0] === 'Z' && p.length >= 3) {
+        state.thermal.temps[p[1]] = Math.round(parseInt(p[2], 10) / 1000);
+      }
+    }
+    const cpuEl = document.getElementById('cpu-thermal-card');
+    if (cpuEl) cpuEl.innerHTML = renderThermalCard('cpu');
+    const gpuEl = document.getElementById('gpu-thermal-card');
+    if (gpuEl) gpuEl.innerHTML = renderThermalCard('gpu');
+  }
+
+  /* ─── Set Thermal Mode ────────────────────────────────────────────── */
+  function setThermalMode(type, mode) {
+    if (type === 'gpu') state.thermal.gpuMode = mode;
+    else state.thermal.cpuMode = mode;
+    const el = document.getElementById(`${type}-thermal-card`);
+    if (el) el.innerHTML = renderThermalCard(type);
+  }
+
+  /* ─── Apply Thermal Mitigation ────────────────────────────────────── */
+  async function applyThermal() {
+    const cpuMode = state.thermal.cpuMode;
+    const gpuMode = state.thermal.gpuMode;
+    const msgs = [];
+
+    /* ── CPU ── */
+    if (cpuMode === 0) {
+      // Restore original trip point temperatures (best-effort; may be read-only)
+      if (state.thermal.cpuOrigTrips.length > 0) {
+        for (const { path, origTemp } of state.thermal.cpuOrigTrips) {
+          if (path && origTemp > 0) await exec('echo ' + origTemp + ' > ' + path + ' 2>/dev/null');
+        }
+      }
+    } else {
+      // Re-trigger KPM OC relift — freq_qos kprobe already intercepts thermal reductions
+      await exec('echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null');
+      msgs.push('CPU OC re-stamped');
+      // Best-effort trip point raise (writable on some kernels)
+      const delta = cpuMode === 1 ? 15000 : 30000;
+      const raiseCmd =
+        'for tz in /sys/class/thermal/thermal_zone*/; do' +
+        ' type=$(cat "${tz}type" 2>/dev/null);' +
+        ' case "$type" in *cpu*|*CPU*|*soc*|*skin*)' +
+        ' for f in "${tz}"trip_point_*_temp; do' +
+        ' [ -f "$f" ] && t=$(cat "$f" 2>/dev/null) && [ -n "$t" ] && echo "$((t+' + delta + '))" > "$f" 2>/dev/null;' +
+        ' done;; esac; done';
+      await exec(raiseCmd);
+      if (cpuMode >= 2) {
+        // Lock CPU freq cooling devices to state 0 (no-op if absent)
+        const lockCmd =
+          'for cd in /sys/class/thermal/cooling_device*/; do' +
+          ' type=$(cat "${cd}type" 2>/dev/null);' +
+          ' case "$type" in *cpufreq*|*cpu-freq*|*cpu_freq*)' +
+          ' echo 0 > "${cd}cur_state" 2>/dev/null;; esac; done';
+        await exec(lockCmd);
+        msgs.push('+cooling locked');
+      }
+    }
+
+    /* ── GPU ── */
+    if (gpuMode === 0) {
+      // Release OPP pin if it was held
+      if (state.thermal.gpuFixActive) {
+        await exec('echo -1 > /proc/gpufreqv2/fix_target_opp_index 2>/dev/null');
+        state.thermal.gpuFixActive = false;
+        msgs.push('GPU pin released');
+      }
+    } else {
+      // Lock GPU cooling devices to state 0
+      const gpuLockCmd =
+        'for cd in /sys/class/thermal/cooling_device*/; do' +
+        ' type=$(cat "${cd}type" 2>/dev/null);' +
+        ' case "$type" in *gpu*|*GPU*|*mali*|*Mali*|*GED*)' +
+        ' echo 0 > "${cd}cur_state" 2>/dev/null;; esac; done';
+      await exec(gpuLockCmd);
+      msgs.push('GPU cdevs locked');
+      if (gpuMode >= 2 && !state.thermal.gpuFixActive) {
+        await exec('echo 0 > /proc/gpufreqv2/fix_target_opp_index 2>/dev/null');
+        state.thermal.gpuFixActive = true;
+        msgs.push('GPU OPP pinned at 1900 MHz');
+      }
+    }
+
+    if (msgs.length > 0) showToast('Thermal: ' + msgs.join(', '), 'success');
+
+    const cpuEl = document.getElementById('cpu-thermal-card');
+    if (cpuEl) cpuEl.innerHTML = renderThermalCard('cpu');
+    const gpuEl = document.getElementById('gpu-thermal-card');
+    if (gpuEl) gpuEl.innerHTML = renderThermalCard('gpu');
   }
 
   /* ─── Scan & Reload ───────────────────────────────────────────────── */
@@ -1588,6 +1835,7 @@
       anyOcApplied = true;
     }
 
+    await applyThermal();
     await saveConfig();
 
     /* --- Storage: apply all block queue + UFS controller settings --- */
@@ -1686,7 +1934,7 @@
 
     /* Flat config — easy to parse from shell without jq */
     const config = {
-      version: 7,
+      version: 9,
       cpu_oc_l_freq:  oc[0] || 0,
       cpu_oc_l_volt:  oc[1] || 0,
       cpu_oc_b_freq:  oc[2] || 0,
@@ -1717,6 +1965,10 @@
     config.io_add_random = state.storage.addRandom || 0;
     if (state.storage.wbOn >= 0) config.ufs_wb_on = state.storage.wbOn;
 
+    /* Thermal mitigation modes */
+    config.cpu_thermal_mode = state.thermal.cpuMode;
+    config.gpu_thermal_mode = state.thermal.gpuMode;
+
     config.saved_at = new Date().toISOString();
 
     const json = JSON.stringify(config);
@@ -1738,6 +1990,9 @@
     applyAll,
     scanAndLoad,
     loadData,
+    refreshTemps,
+    setThermalMode,
+    applyThermal,
     /* Diagnostic: run from browser console via OC.diagExec() */
     diagExec: async () => {
       const r = await exec('id -Z && cat /proc/self/attr/current && echo "---" && echo test_write > /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1; echo "exit=$?" && cat /sys/module/kpm_oc/parameters/cpu_oc_b_freq 2>&1');

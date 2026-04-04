@@ -204,6 +204,53 @@ fi
             echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
     done
     echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+
+    # ─── Thermal mitigation ───────────────────────────────────────────────
+    cpu_thermal_mode=$(json_int cpu_thermal_mode)
+    gpu_thermal_mode=$(json_int gpu_thermal_mode)
+    cpu_thermal_mode=${cpu_thermal_mode:-0}
+    gpu_thermal_mode=${gpu_thermal_mode:-0}
+
+    if [ "${cpu_thermal_mode}" -gt 0 ] 2>/dev/null; then
+        RAISE_DELTA=15000
+        [ "${cpu_thermal_mode}" -ge 2 ] && RAISE_DELTA=30000
+        for tz in /sys/class/thermal/thermal_zone*/; do
+            type=$(cat "${tz}type" 2>/dev/null)
+            case "${type}" in
+                *cpu*|*CPU*|*soc*|*skin*)
+                    for f in "${tz}"trip_point_*_temp; do
+                        [ -f "${f}" ] || continue
+                        t=$(cat "${f}" 2>/dev/null)
+                        [ -n "${t}" ] && echo "$((t + RAISE_DELTA))" > "${f}" 2>/dev/null
+                    done ;;
+            esac
+        done
+        if [ "${cpu_thermal_mode}" -ge 2 ] 2>/dev/null; then
+            for cd in /sys/class/thermal/cooling_device*/; do
+                type=$(cat "${cd}type" 2>/dev/null)
+                case "${type}" in
+                    *cpufreq*|*cpu-freq*|*cpu_freq*)
+                        echo 0 > "${cd}cur_state" 2>/dev/null ;;
+                esac
+            done
+        fi
+        logi "CPU thermal mitigation mode=${cpu_thermal_mode} applied (delta=${RAISE_DELTA}mC)"
+    fi
+
+    if [ "${gpu_thermal_mode}" -gt 0 ] 2>/dev/null; then
+        for cd in /sys/class/thermal/cooling_device*/; do
+            type=$(cat "${cd}type" 2>/dev/null)
+            case "${type}" in
+                *gpu*|*GPU*|*mali*|*Mali*|*GED*)
+                    echo 0 > "${cd}cur_state" 2>/dev/null ;;
+            esac
+        done
+        if [ "${gpu_thermal_mode}" -ge 2 ] 2>/dev/null; then
+            echo 0 > /proc/gpufreqv2/fix_target_opp_index 2>/dev/null
+        fi
+        logi "GPU thermal mitigation mode=${gpu_thermal_mode} applied"
+    fi
+
     # Re-apply DRAM min freq floor (vendor services may have reset it)
     dram_min=$(json_int dram_min_freq)
     if [ -n "${dram_min}" ] && [ "${dram_min}" -gt 0 ] 2>/dev/null; then
