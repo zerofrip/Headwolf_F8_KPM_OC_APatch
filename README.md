@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v8.0) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v8.1) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 

@@ -15,7 +15,7 @@
     en: {
       /* Header */
       'header.title': 'OC Manager',
-      'header.subtitle': 'Headwolf F8 · Dimensity 8300 · v8.0',
+      'header.subtitle': 'Headwolf F8 · Dimensity 8300',
       'header.checking': 'Checking...',
       'header.module_active': 'Module Active',
       'header.module_not_loaded': 'Module Not Loaded',
@@ -203,7 +203,7 @@
     ja: {
       /* Header */
       'header.title': 'OC Manager',
-      'header.subtitle': 'Headwolf F8 · Dimensity 8300 · v8.0',
+      'header.subtitle': 'Headwolf F8 · Dimensity 8300',
       'header.checking': '確認中...',
       'header.module_active': 'モジュール動作中',
       'header.module_not_loaded': 'モジュール未ロード',
