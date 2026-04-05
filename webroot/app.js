@@ -12,7 +12,15 @@
   /* ─── Constants ───────────────────────────────────────────────────── */
   const KS_PARAMS = '/sys/module/kpm_oc/parameters/';
   const CONFIG_DIR = '/data/adb/modules/f8_kpm_oc_manager';
-  const CONFIG_FILE = `${CONFIG_DIR}/oc_config.json`;
+  const CONF_DIR = `${CONFIG_DIR}/conf`;
+  const CONF_CPU_OC = `${CONF_DIR}/cpu_oc.json`;
+  const CONF_GPU_OC = `${CONF_DIR}/gpu_oc.json`;
+  const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
+  const CONF_DRAM = `${CONF_DIR}/dram.json`;
+  const CONF_IO = `${CONF_DIR}/io.json`;
+  const CONF_UFS = `${CONF_DIR}/ufs.json`;
+  const CONF_THERMAL = `${CONF_DIR}/thermal.json`;
+  const CONF_PROFILE = `${CONF_DIR}/profile.json`;
   const CPU_OPP_FILE = `${CONFIG_DIR}/cpu_opp_table`;
   const GPU_OPP_FILE = `${CONFIG_DIR}/gpu_opp_table`;
   const GPU_DEVFREQ_PATH_FILE = `${CONFIG_DIR}/gpu_devfreq_path`;
@@ -1303,17 +1311,20 @@
     // --- Thermal Data ---
     await loadThermalData();
     // Read saved thermal modes from config
-    const thermalCfgRes = await exec(`cat ${CONFIG_FILE} 2>/dev/null`);
+    const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
     if (thermalCfgRes.stdout) {
       const cpuTM = thermalCfgRes.stdout.match(/"cpu_thermal_mode"\s*:\s*(\d+)/);
       const gpuTM = thermalCfgRes.stdout.match(/"gpu_thermal_mode"\s*:\s*(\d+)/);
       if (cpuTM) state.thermal.cpuMode = parseInt(cpuTM[1], 10) || 0;
       if (gpuTM) state.thermal.gpuMode = parseInt(gpuTM[1], 10) || 0;
+    }
 
-      // Profile / Auto Gaming config
-      const pmM = thermalCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
-      const agM = thermalCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
-      const gaM = thermalCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
+    // Profile / Auto Gaming config
+    const profileCfgRes = await exec(`cat ${CONF_PROFILE} 2>/dev/null`);
+    if (profileCfgRes.stdout) {
+      const pmM = profileCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
+      const agM = profileCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
+      const gaM = profileCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
       if (pmM) state.profile.powerMode = parseInt(pmM[1], 10);
       if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
       if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
@@ -1405,9 +1416,9 @@
     }
 
     /* Use config values for user-selected fields; fall back to first device's current value */
-    const cfgRes = await exec(`cat ${CONFIG_FILE} 2>/dev/null`);
-    if (cfgRes.stdout) {
-      const cfg = cfgRes.stdout;
+    const ioCfgRes = await exec(`cat ${CONF_IO} 2>/dev/null`);
+    if (ioCfgRes.stdout) {
+      const cfg = ioCfgRes.stdout;
       const raM = cfg.match(/"io_read_ahead_kb":([0-9]+)/);
       if (raM) state.storage.readAheadKb = parseInt(raM[1], 10);
       const schedM = cfg.match(/"io_scheduler":"([^"]+)"/);
@@ -1420,7 +1431,10 @@
       if (ioM) state.storage.iostats = parseInt(ioM[1], 10);
       const arM = cfg.match(/"io_add_random":([0-9]+)/);
       if (arM) state.storage.addRandom = parseInt(arM[1], 10);
-      const wbM = cfg.match(/"ufs_wb_on":([0-9]+)/);
+    }
+    const ufsCfgRes = await exec(`cat ${CONF_UFS} 2>/dev/null`);
+    if (ufsCfgRes.stdout) {
+      const wbM = ufsCfgRes.stdout.match(/"ufs_wb_on":([0-9]+)/);
       if (wbM) state.storage.wbOn = parseInt(wbM[1], 10);
     }
 
@@ -2392,7 +2406,7 @@
     }
   }
 
-  /* ─── Save Config ─────────────────────────────────────────────────── */
+  /* ─── Save Config (per-section split files) ──────────────────────────── */
   async function saveConfig() {
     /* Read current kpm_oc OC params from sysfs (post-apply state) */
     const ocRaw = await exec(
@@ -2408,52 +2422,90 @@
     );
     const oc = ocRaw.stdout.trim().split(/\s+/).map(v => parseInt(v, 10) || 0);
 
-    /* Flat config — easy to parse from shell without jq */
-    const config = {
-      version: 9,
+    await exec(`mkdir -p ${CONF_DIR}`);
+
+    const esc = (s) => s.replace(/'/g, "'\\''");
+
+    /* CPU OC */
+    const cpuOcJson = JSON.stringify({
       cpu_oc_l_freq:  oc[0] || 0,
       cpu_oc_l_volt:  oc[1] || 0,
       cpu_oc_b_freq:  oc[2] || 0,
       cpu_oc_b_volt:  oc[3] || 0,
       cpu_oc_p_freq:  oc[4] || 0,
       cpu_oc_p_volt:  oc[5] || 0,
+    });
+    await exec(`printf '%s' '${esc(cpuOcJson)}' > ${CONF_CPU_OC}`);
+
+    /* GPU OC */
+    const gpuOcJson = JSON.stringify({
       gpu_oc_freq:    oc[6] || 0,
       gpu_oc_volt:    oc[7] || 0,
       gpu_oc_vsram:   oc[8] || 0,
-    };
+    });
+    await exec(`printf '%s' '${esc(gpuOcJson)}' > ${CONF_GPU_OC}`);
 
-    /* Add scaling limits */
+    /* CPU Scaling */
+    const scalingObj = {};
     for (const cluster of state.cpuClusters) {
-      /* Persist resolved runtime values to avoid stale select fallback. */
-      config[`cpu_max_${cluster.id}`] = parseInt(cluster.curMax, 10) || 0;
-      config[`cpu_min_${cluster.id}`] = parseInt(cluster.curMin, 10) || 0;
+      scalingObj[`cpu_max_${cluster.id}`] = parseInt(cluster.curMax, 10) || 0;
+      scalingObj[`cpu_min_${cluster.id}`] = parseInt(cluster.curMin, 10) || 0;
     }
+    await exec(`printf '%s' '${esc(JSON.stringify(scalingObj))}' > ${CONF_CPU_SCALING}`);
 
-    /* Add DRAM min freq floor */
-    config.dram_min_freq = state.ram.selectedMinFreq || 0;
+    /* DRAM */
+    const dramJson = JSON.stringify({ dram_min_freq: state.ram.selectedMinFreq || 0 });
+    await exec(`printf '%s' '${esc(dramJson)}' > ${CONF_DRAM}`);
 
-    /* Add storage / I/O settings */
-    config.io_read_ahead_kb = state.storage.readAheadKb || 2048;
-    config.io_scheduler = state.storage.scheduler || 'none';
-    config.io_nomerges = state.storage.nomerges || 0;
-    config.io_rq_affinity = state.storage.rqAffinity ?? 2;
-    config.io_iostats = state.storage.iostats ?? 1;
-    config.io_add_random = state.storage.addRandom || 0;
-    if (state.storage.wbOn >= 0) config.ufs_wb_on = state.storage.wbOn;
+    /* I/O */
+    const ioJson = JSON.stringify({
+      io_read_ahead_kb: state.storage.readAheadKb || 2048,
+      io_scheduler: state.storage.scheduler || 'none',
+      io_nomerges: state.storage.nomerges || 0,
+      io_rq_affinity: state.storage.rqAffinity ?? 2,
+      io_iostats: state.storage.iostats ?? 1,
+      io_add_random: state.storage.addRandom || 0,
+    });
+    await exec(`printf '%s' '${esc(ioJson)}' > ${CONF_IO}`);
 
-    /* Thermal mitigation modes */
-    config.cpu_thermal_mode = state.thermal.cpuMode;
-    config.gpu_thermal_mode = state.thermal.gpuMode;
+    /* UFS */
+    const ufsObj = {};
+    if (state.storage.wbOn >= 0) ufsObj.ufs_wb_on = state.storage.wbOn;
+    await exec(`printf '%s' '${esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
 
-    /* Profile & Gaming */
-    config.power_mode = state.profile.powerMode;
-    config.auto_gaming = state.profile.autoGaming.enabled ? 1 : 0;
-    config.gaming_apps = state.profile.autoGaming.apps.join(',');
+    /* Thermal */
+    const thermalJson = JSON.stringify({
+      cpu_thermal_mode: state.thermal.cpuMode,
+      gpu_thermal_mode: state.thermal.gpuMode,
+    });
+    await exec(`printf '%s' '${esc(thermalJson)}' > ${CONF_THERMAL}`);
 
-    config.saved_at = new Date().toISOString();
+    /* Profile */
+    const profileJson = JSON.stringify({
+      power_mode: state.profile.powerMode,
+      auto_gaming: state.profile.autoGaming.enabled ? 1 : 0,
+      gaming_apps: state.profile.autoGaming.apps.join(','),
+    });
+    await exec(`printf '%s' '${esc(profileJson)}' > ${CONF_PRO
+    /* UFS */
+    const ufsObj = {};
+    if (state.storage.wbOn >= 0) ufsObj.ufs_wb_on = state.storage.wbOn;
+    await exec(`printf '%s' '${esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
 
-    const json = JSON.stringify(config);
-    await exec(`mkdir -p ${CONFIG_DIR} && printf '%s' '${json.replace(/'/g, "'\\''")}' > ${CONFIG_FILE}`);
+    /* Thermal */
+    const thermalJson = JSON.stringify({
+      cpu_thermal_mode: state.thermal.cpuMode,
+      gpu_thermal_mode: state.thermal.gpuMode,
+    });
+    await exec(`printf '%s' '${esc(thermalJson)}' > ${CONF_THERMAL}`);
+
+    /* Profile */
+    const profileJson = JSON.stringify({
+      power_mode: state.profile.powerMode,
+      auto_gaming: state.profile.autoGaming.enabled ? 1 : 0,
+      gaming_apps: state.profile.autoGaming.apps.join(','),
+    });
+    await exec(`printf '%s' '${esc(profileJson)}' > ${CONF_PROFILE}`);
   }
 
   /* ─── Public API ──────────────────────────────────────────────────── */

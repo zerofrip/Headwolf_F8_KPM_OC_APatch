@@ -1,25 +1,30 @@
 #!/system/bin/sh
-# Headwolf F8 KPM OC Manager - Service Script v8.1
+# Headwolf F8 KPM OC Manager - Service Script v9.0
 # Reads CPU OPP from kernel module (CSRAM), GPU OPP from /proc/gpufreqv2
 # Restores OC config (CPU/GPU/DRAM/IO/UFS) and scaling limits from saved config
+# v9.0: Split config into per-section JSON files under conf/
 MODDIR=${0%/*}
 CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
-CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
 CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
 GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 CPU_RAW_FILE="${CONFIG_DIR}/cpu_raw_dump"
 UFS_HCI_PATH="/sys/devices/platform/11270000.ufshci"
 
-mkdir -p "${CONFIG_DIR}" 2>/dev/null
+# ─── Split config paths ──────────────────────────────────────────────────
+CONF_DIR="${CONFIG_DIR}/conf"
+CONF_CPU_OC="${CONF_DIR}/cpu_oc.json"
+CONF_GPU_OC="${CONF_DIR}/gpu_oc.json"
+CONF_CPU_SCALING="${CONF_DIR}/cpu_scaling.json"
+CONF_DRAM="${CONF_DIR}/dram.json"
+CONF_IO="${CONF_DIR}/io.json"
+CONF_UFS="${CONF_DIR}/ufs.json"
+CONF_THERMAL="${CONF_DIR}/thermal.json"
+CONF_PROFILE="${CONF_DIR}/profile.json"
 
-# On first install, seed user config from the bundled default.
-# On module updates the existing oc_config.json is preserved so
-# user-customised settings are not overwritten.
-DEFAULT_CONFIG="${MODDIR}/oc_config.default.json"
-if [ ! -f "${CONFIG_FILE}" ] && [ -f "${DEFAULT_CONFIG}" ]; then
-    cp "${DEFAULT_CONFIG}" "${CONFIG_FILE}"
-    logi "First install: seeded oc_config.json from bundled default"
-fi
+# Legacy single-file config (for migration)
+OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
+
+mkdir -p "${CONF_DIR}" 2>/dev/null
 
 logi() {
     log -t "KPM_OC" "$1"
@@ -35,31 +40,77 @@ resolve_gpu_devfreq_path() {
     return 1
 }
 
-# ─── Parse OC config for insmod params ───────────────────────────────────
-# Flat JSON keys: cpu_oc_{l,b,p}_{freq,volt}, gpu_oc_{freq,volt,vsram}
+# ─── JSON helpers (second arg = file path) ────────────────────────────────
 json_int() {
-    grep -o "\"$1\":[0-9]*" "${CONFIG_FILE}" 2>/dev/null | head -1 | grep -o '[0-9]*$'
+    grep -o "\"$1\":[0-9]*" "$2" 2>/dev/null | head -1 | grep -o '[0-9]*$'
 }
 
 json_str() {
-    grep -o "\"$1\":\"[^\"]*\"" "${CONFIG_FILE}" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'
+    grep -o "\"$1\":\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'
 }
 
+# ─── Migrate from legacy single-file config to split files ────────────────
+migrate_legacy_config() {
+    [ -f "${OLD_CONFIG_FILE}" ] || return 0
+    [ -f "${CONF_CPU_OC}" ] && return 0   # already migrated
+
+    logi "Migrating legacy oc_config.json to split conf/ files..."
+    local o="${OLD_CONFIG_FILE}"
+    _oi() { local v; v=$(grep -o "\"$1\":[0-9]*" "${o}" 2>/dev/null | head -1 | grep -o '[0-9]*$'); echo "${v:-0}"; }
+    _os() { grep -o "\"$1\":\"[^\"]*\"" "${o}" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'; }
+
+    printf '{"cpu_oc_l_freq":%s,"cpu_oc_l_volt":%s,"cpu_oc_b_freq":%s,"cpu_oc_b_volt":%s,"cpu_oc_p_freq":%s,"cpu_oc_p_volt":%s}\n' \
+        "$(_oi cpu_oc_l_freq)" "$(_oi cpu_oc_l_volt)" "$(_oi cpu_oc_b_freq)" "$(_oi cpu_oc_b_volt)" "$(_oi cpu_oc_p_freq)" "$(_oi cpu_oc_p_volt)" > "${CONF_CPU_OC}"
+    printf '{"gpu_oc_freq":%s,"gpu_oc_volt":%s,"gpu_oc_vsram":%s}\n' \
+        "$(_oi gpu_oc_freq)" "$(_oi gpu_oc_volt)" "$(_oi gpu_oc_vsram)" > "${CONF_GPU_OC}"
+    printf '{"cpu_max_0":%s,"cpu_min_0":%s,"cpu_max_4":%s,"cpu_min_4":%s,"cpu_max_7":%s,"cpu_min_7":%s}\n' \
+        "$(_oi cpu_max_0)" "$(_oi cpu_min_0)" "$(_oi cpu_max_4)" "$(_oi cpu_min_4)" "$(_oi cpu_max_7)" "$(_oi cpu_min_7)" > "${CONF_CPU_SCALING}"
+    printf '{"dram_min_freq":%s}\n' "$(_oi dram_min_freq)" > "${CONF_DRAM}"
+    printf '{"io_read_ahead_kb":%s,"io_scheduler":"%s","io_nomerges":%s,"io_rq_affinity":%s,"io_iostats":%s,"io_add_random":%s}\n' \
+        "$(_oi io_read_ahead_kb)" "$(_os io_scheduler)" "$(_oi io_nomerges)" "$(_oi io_rq_affinity)" "$(_oi io_iostats)" "$(_oi io_add_random)" > "${CONF_IO}"
+    printf '{"ufs_wb_on":%s}\n' "$(_oi ufs_wb_on)" > "${CONF_UFS}"
+    printf '{"cpu_thermal_mode":%s,"gpu_thermal_mode":%s}\n' "$(_oi cpu_thermal_mode)" "$(_oi gpu_thermal_mode)" > "${CONF_THERMAL}"
+    printf '{"power_mode":%s,"auto_gaming":%s,"gaming_apps":"%s"}\n' \
+        "$(_oi power_mode)" "$(_oi auto_gaming)" "$(_os gaming_apps)" > "${CONF_PROFILE}"
+
+    mv "${OLD_CONFIG_FILE}" "${OLD_CONFIG_FILE}.bak.v9"
+    logi "Migration complete. Old config backed up."
+    unset -f _oi _os
+}
+
+# ─── Seed defaults on first install ───────────────────────────────────────
+seed_default_conf() {
+    local defaults="${MODDIR}/conf.default"
+    [ -d "${defaults}" ] || return 0
+    for src in "${defaults}"/*.json; do
+        [ -f "${src}" ] || continue
+        local name=$(basename "${src}")
+        local dst="${CONF_DIR}/${name}"
+        if [ ! -f "${dst}" ]; then
+            cp "${src}" "${dst}"
+            logi "Seeded default: ${name}"
+        fi
+    done
+}
+
+migrate_legacy_config
+seed_default_conf
+
 INSMOD_PARAMS=""
-if [ -f "${CONFIG_FILE}" ]; then
+if [ -f "${CONF_CPU_OC}" ]; then
     for key in cpu_oc_l_freq cpu_oc_l_volt cpu_oc_b_freq cpu_oc_b_volt \
                cpu_oc_p_freq cpu_oc_p_volt; do
-        v=$(json_int "${key}")
+        v=$(json_int "${key}" "${CONF_CPU_OC}")
         [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} ${key}=${v}"
     done
-
-    # GPU OC: config keys → module param names
-    v=$(json_int gpu_oc_freq);  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_freq=$v"
-    v=$(json_int gpu_oc_volt);  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_volt=$v"
-    v=$(json_int gpu_oc_vsram); [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_vsram=$v"
-
-    logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
 fi
+if [ -f "${CONF_GPU_OC}" ]; then
+    # GPU OC: config keys → module param names
+    v=$(json_int gpu_oc_freq "${CONF_GPU_OC}");  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_freq=$v"
+    v=$(json_int gpu_oc_volt "${CONF_GPU_OC}");  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_volt=$v"
+    v=$(json_int gpu_oc_vsram "${CONF_GPU_OC}"); [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_vsram=$v"
+fi
+logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
 
 # Load the compiled KPM module into the kernel
 insmod ${MODDIR}/kpm_oc.ko${INSMOD_PARAMS} 2>/dev/null
@@ -74,10 +125,10 @@ chmod 644 /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null
 
 # ─── Restore CPU scaling limits from config ──────────────────────────────
-if [ -f "${CONFIG_FILE}" ]; then
+if [ -f "${CONF_CPU_SCALING}" ]; then
     for policy in 0 4 7; do
-        max_val=$(json_int "cpu_max_${policy}")
-        min_val=$(json_int "cpu_min_${policy}")
+        max_val=$(json_int "cpu_max_${policy}" "${CONF_CPU_SCALING}")
+        min_val=$(json_int "cpu_min_${policy}" "${CONF_CPU_SCALING}")
         if [ -n "$min_val" ] && [ "$min_val" -gt 0 ] 2>/dev/null; then
             echo "$min_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_min_freq 2>/dev/null
         fi
@@ -86,12 +137,14 @@ if [ -f "${CONFIG_FILE}" ]; then
         fi
     done
     logi "CPU scaling limits restored from config"
+fi
 
     # CPU OC relift pass: vendor constraints can race and clamp first write.
     # Re-run cpu_oc_apply, then restore scaling_max once more.
+if [ -f "${CONF_CPU_OC}" ]; then
     cpu_oc_enabled=0
     for key in cpu_oc_l_freq cpu_oc_b_freq cpu_oc_p_freq; do
-        v=$(json_int "${key}")
+        v=$(json_int "${key}" "${CONF_CPU_OC}")
         if [ -n "${v}" ] && [ "${v}" -gt 0 ] 2>/dev/null; then
             cpu_oc_enabled=1
             break
@@ -101,12 +154,14 @@ if [ -f "${CONFIG_FILE}" ]; then
     if [ "${cpu_oc_enabled}" = "1" ]; then
         echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
         sleep 1
-        for policy in 0 4 7; do
-            max_val=$(json_int "cpu_max_${policy}")
-            if [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null; then
-                echo "$max_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null
-            fi
-        done
+        if [ -f "${CONF_CPU_SCALING}" ]; then
+            for policy in 0 4 7; do
+                max_val=$(json_int "cpu_max_${policy}" "${CONF_CPU_SCALING}")
+                if [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null; then
+                    echo "$max_val" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null
+                fi
+            done
+        fi
         logi "CPU OC relift pass completed"
     fi
 fi
@@ -119,8 +174,8 @@ CPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null)
 [ -n "${CPU_OC_RES}" ] && logi "CPU OC result (auto on load): ${CPU_OC_RES}"
 
 # GPU relift pass: re-apply GPU OC and restore devfreq max ceiling.
-if [ -f "${CONFIG_FILE}" ]; then
-    gpu_freq=$(json_int gpu_oc_freq)
+if [ -f "${CONF_GPU_OC}" ]; then
+    gpu_freq=$(json_int gpu_oc_freq "${CONF_GPU_OC}")
     if [ -n "${gpu_freq}" ] && [ "${gpu_freq}" -gt 0 ] 2>/dev/null; then
         echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
         sleep 1
@@ -139,8 +194,8 @@ fi
 
 # ─── Restore DRAM min freq floor from config ─────────────────────────────
 DRAM_DEVFREQ="/sys/class/devfreq/mtk-dvfsrc-devfreq"
-if [ -f "${CONFIG_FILE}" ] && [ -d "${DRAM_DEVFREQ}" ]; then
-    dram_min=$(json_int dram_min_freq)
+if [ -f "${CONF_DRAM}" ] && [ -d "${DRAM_DEVFREQ}" ]; then
+    dram_min=$(json_int dram_min_freq "${CONF_DRAM}")
     if [ -n "${dram_min}" ] && [ "${dram_min}" -gt 0 ] 2>/dev/null; then
         echo "${dram_min}" | tee "${DRAM_DEVFREQ}/min_freq" > /dev/null 2>&1
         cur_dram=$(cat "${DRAM_DEVFREQ}/cur_freq" 2>/dev/null)
@@ -198,7 +253,7 @@ fi
 GAMING_SCRIPT="${CONFIG_DIR}/gaming_monitor.sh"
 cat > "${GAMING_SCRIPT}" << 'GDEOF'
 #!/system/bin/sh
-CFG="/data/adb/modules/f8_kpm_oc_manager/oc_config.json"
+CONF="/data/adb/modules/f8_kpm_oc_manager/conf"
 PID_F="/data/adb/modules/f8_kpm_oc_manager/gaming_monitor.pid"
 KS="/sys/module/kpm_oc/parameters/"
 DRAM_DF="/sys/class/devfreq/mtk-dvfsrc-devfreq"
@@ -206,8 +261,11 @@ DRAM_DF="/sys/class/devfreq/mtk-dvfsrc-devfreq"
 echo $$ > "$PID_F"
 BOOSTED=0
 
+_ji() { grep -o "\"$1\":[0-9]*" "$2" 2>/dev/null | head -1 | grep -o '[0-9]*$'; }
+_js() { grep -o "\"$1\":\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'; }
+
 while true; do
-    games=$(grep -o '"gaming_apps":"[^"]*"' "$CFG" 2>/dev/null | sed 's/"gaming_apps":"//;s/"$//')
+    games=$(_js gaming_apps "$CONF/profile.json")
     [ -z "$games" ] && sleep 5 && continue
 
     FG=$(dumpsys activity activities 2>/dev/null | grep 'mResumedActivity' | head -1 | sed 's|.*u0 ||;s|/.*||;s| .*||')
@@ -237,7 +295,7 @@ while true; do
         BOOSTED=1
     elif [ "$IS_GAMING" = "0" ] && [ "$BOOSTED" = "1" ]; then
         # Revert to saved power mode
-        pm=$(grep -o '"power_mode":[0-9]*' "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+        pm=$(_ji power_mode "$CONF/profile.json")
         pm=${pm:-1}
         case $pm in
             0) # Battery Save
@@ -248,10 +306,10 @@ while true; do
                 ;;
             *) # Normal or Performance — use config values
                 for p in 0 4 7; do
-                    mv=$(grep -o "\"cpu_max_${p}\":[0-9]*" "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+                    mv=$(_ji "cpu_max_${p}" "$CONF/cpu_scaling.json")
                     [ -n "$mv" ] && echo "$mv" > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_max_freq" 2>/dev/null
                 done
-                dm=$(grep -o '"dram_min_freq":[0-9]*' "$CFG" 2>/dev/null | grep -o '[0-9]*$')
+                dm=$(_ji dram_min_freq "$CONF/dram.json")
                 [ -n "$dm" ] && echo "$dm" > "${DRAM_DF}/min_freq" 2>/dev/null
                 ;;
         esac
@@ -270,15 +328,15 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
     echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
     sleep 1
     for policy in 0 4 7; do
-        max_val=$(json_int "cpu_max_${policy}")
+        max_val=$(json_int "cpu_max_${policy}" "${CONF_CPU_SCALING}")
         [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null && \
             echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
     done
     echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
 
     # ─── Thermal mitigation ───────────────────────────────────────────────
-    cpu_thermal_mode=$(json_int cpu_thermal_mode)
-    gpu_thermal_mode=$(json_int gpu_thermal_mode)
+    cpu_thermal_mode=$(json_int cpu_thermal_mode "${CONF_THERMAL}")
+    gpu_thermal_mode=$(json_int gpu_thermal_mode "${CONF_THERMAL}")
     cpu_thermal_mode=${cpu_thermal_mode:-0}
     gpu_thermal_mode=${gpu_thermal_mode:-0}
 
@@ -323,19 +381,19 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
     fi
 
     # Re-apply DRAM min freq floor (vendor services may have reset it)
-    dram_min=$(json_int dram_min_freq)
+    dram_min=$(json_int dram_min_freq "${CONF_DRAM}")
     if [ -n "${dram_min}" ] && [ "${dram_min}" -gt 0 ] 2>/dev/null; then
         echo "${dram_min}" | tee "${DRAM_DEVFREQ}/min_freq" > /dev/null 2>&1
     fi
     logi "Late-boot relift completed"
 
     # ─── Restore I/O & UFS settings on all UFS block devices ─────────────
-    io_read_ahead=$(json_int io_read_ahead_kb)
-    io_scheduler=$(json_str io_scheduler)
-    io_nomerges=$(json_int io_nomerges)
-    io_rq_affinity=$(json_int io_rq_affinity)
-    io_iostats=$(json_int io_iostats)
-    io_add_random=$(json_int io_add_random)
+    io_read_ahead=$(json_int io_read_ahead_kb "${CONF_IO}")
+    io_scheduler=$(json_str io_scheduler "${CONF_IO}")
+    io_nomerges=$(json_int io_nomerges "${CONF_IO}")
+    io_rq_affinity=$(json_int io_rq_affinity "${CONF_IO}")
+    io_iostats=$(json_int io_iostats "${CONF_IO}")
+    io_add_random=$(json_int io_add_random "${CONF_IO}")
 
     for dev in /sys/block/sd*; do
         [ -d "${dev}/queue" ] || continue
@@ -357,14 +415,14 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
 
     # ─── UFS controller (ufshcd) settings ────────────────────────────────
     if [ -d "${UFS_HCI_PATH}" ]; then
-        ufs_wb=$(json_int ufs_wb_on)
+        ufs_wb=$(json_int ufs_wb_on "${CONF_UFS}")
         [ -n "${ufs_wb}" ] && echo "${ufs_wb}" > "${UFS_HCI_PATH}/wb_on" 2>/dev/null && \
             logi "UFS Write Booster = ${ufs_wb}"
     fi
 
     # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────
-    auto_gaming=$(json_int auto_gaming)
-    gaming_apps_str=$(json_str gaming_apps)
+    auto_gaming=$(json_int auto_gaming "${CONF_PROFILE}")
+    gaming_apps_str=$(json_str gaming_apps "${CONF_PROFILE}")
     if [ "${auto_gaming}" = "1" ] && [ -n "${gaming_apps_str}" ]; then
         # Kill stale daemon if running
         [ -f "${CONFIG_DIR}/gaming_monitor.pid" ] && kill "$(cat "${CONFIG_DIR}/gaming_monitor.pid" 2>/dev/null)" 2>/dev/null
@@ -373,4 +431,4 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
     fi
 } &
 
-logi "Service script v8.0 completed. Module loaded."
+logi "Service script v9.0 completed. Module loaded."
