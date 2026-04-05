@@ -2486,25 +2486,6 @@
       auto_gaming: state.profile.autoGaming.enabled ? 1 : 0,
       gaming_apps: state.profile.autoGaming.apps.join(','),
     });
-    await exec(`printf '%s' '${esc(profileJson)}' > ${CONF_PRO
-    /* UFS */
-    const ufsObj = {};
-    if (state.storage.wbOn >= 0) ufsObj.ufs_wb_on = state.storage.wbOn;
-    await exec(`printf '%s' '${esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
-
-    /* Thermal */
-    const thermalJson = JSON.stringify({
-      cpu_thermal_mode: state.thermal.cpuMode,
-      gpu_thermal_mode: state.thermal.gpuMode,
-    });
-    await exec(`printf '%s' '${esc(thermalJson)}' > ${CONF_THERMAL}`);
-
-    /* Profile */
-    const profileJson = JSON.stringify({
-      power_mode: state.profile.powerMode,
-      auto_gaming: state.profile.autoGaming.enabled ? 1 : 0,
-      gaming_apps: state.profile.autoGaming.apps.join(','),
-    });
     await exec(`printf '%s' '${esc(profileJson)}' > ${CONF_PROFILE}`);
   }
 
