@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v8.1) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v9.0) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -8,7 +8,7 @@ APatch/KernelSU module (v8.1) providing CPU, GPU, DRAM, Storage overclocking/tun
 - **CPU Overclocking** — Patches CSRAM LUT[0] per cluster and updates the Linux cpufreq policy ceiling at runtime
 - **CPU Per-LUT Voltage Override** — Direct CSRAM writes for any LUT entry, bypassing stock voltage constraints. Original values saved and restored on `clear`
 - **MCUPM CSRAM Countermeasure** *(v7.2)* — kprobes on `scmi_cpufreq_fast_switch` and `scmi_cpufreq_set_target` resync OC voltages into CSRAM immediately before every CPU DVFS transition, preventing MCUPM firmware from reverting them between relift cycles
-- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; module parameter default is 1900 MHz @ 1150.4 mV (overridden by `oc_config.json` on boot)
+- **GPU Overclocking** — Patches the GPU default + working OPP tables in kernel memory; module parameter default is 1900 MHz @ 1150.4 mV (overridden by `conf/gpu_oc.json` on boot)
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU PLL Direct Programming** *(v8.0)* — kretprobe on `gpufreq_commit` reprograms MFG PLL CON1 after GPUEB commits above-stock OC frequency
@@ -19,15 +19,26 @@ APatch/KernelSU module (v8.1) providing CPU, GPU, DRAM, Storage overclocking/tun
 - **Power Profiles** *(v8.0)* — Three selectable power modes (Battery Save / Normal / Performance) that control CPU scaling limits, DRAM floor, and thermal mitigation as a single preset
 - **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic Performance OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all power modes
 - **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile), i18n support (English / 日本語), language switcher in header: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, one-tap apply
-- **Configuration Persistence** — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to `oc_config.json`; automatically restored on boot via `insmod` params and sysfs writes
+- **Configuration Persistence** *(v9.0)* — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to per-section JSON files under `conf/`; automatically restored on boot via `insmod` params and sysfs writes. Legacy single-file `oc_config.json` is auto-migrated on first boot
 
 ## Structure
 
 ```text
-├── module.prop                     # APatch module metadata
+├── module.prop                     # APatch module metadata (v9.0)
 ├── kpm_oc.ko                       # Compiled kernel module (v8.0)
-├── service.sh                      # Boot-time service (v8.0)
-├── oc_config.default.json          # Default config (seeded on first install)
+├── service.sh                      # Boot-time service (v9.0)
+├── icon_extractor.dex              # DEX for app icon extraction (ActivityThread → Bitmap → base64)
+├── conf.default/                   # Default config files (seeded on first install)
+│   ├── cpu_oc.json                 # CPU OC freq/volt per cluster (L/B/P)
+│   ├── gpu_oc.json                 # GPU OC freq/volt/vsram
+│   ├── cpu_scaling.json            # CPU scaling min/max per policy
+│   ├── dram.json                   # DRAM minimum frequency
+│   ├── io.json                     # I/O scheduler settings
+│   ├── ufs.json                    # UFS write booster
+│   ├── thermal.json                # CPU/GPU thermal modes
+│   └── profile.json                # Power mode, auto gaming, gaming apps
+├── conf/                           # Active config (per-user, persisted across reboots)
+│   └── (same 8 files as conf.default/)
 └── webroot/
     ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile tabs)
     ├── i18n.js                     # Internationalization module (EN / JA)
@@ -35,56 +46,59 @@ APatch/KernelSU module (v8.1) providing CPU, GPU, DRAM, Storage overclocking/tun
     └── style.css                   # Dark glassmorphism design system
 ```
 
-## Boot Flow (`service.sh`)
+## Boot Flow (`service.sh` v9.0)
 
-1. Parse `oc_config.json` for saved OC params (CPU + GPU + DRAM + I/O + UFS + thermal + gaming) and build `insmod` parameter string
-2. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=4000000 gpu_target_freq=1900000 ...`)
+1. **Migrate legacy config** — If `oc_config.json` exists and `conf/cpu_oc.json` does not, extract values into 8 split files under `conf/` and rename old file to `.bak.v9`
+2. **Seed defaults** — Copy any missing `conf/*.json` from `conf.default/`
+3. Parse `conf/cpu_oc.json` + `conf/gpu_oc.json` for saved OC params and build `insmod` parameter string
+4. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=4000000 gpu_target_freq=1900000 ...`)
    - CPU CSRAM auto-scan runs on init
    - GPU OC auto-applies on init
    - CPU OC auto-applies if any `cpu_oc_*_freq` param is nonzero
-3. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from config
-4. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
-5. Log CPU/GPU OC results
-6. Restore DRAM min freq floor via DVFSRC devfreq (`/sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq`)
-7. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
-8. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
-9. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
-10. Write `gaming_monitor.sh` daemon script to `CONFIG_DIR`
-11. Launch background late-boot relift at T+45 s:
+5. Restore CPU scaling limits (`scaling_min_freq` / `scaling_max_freq`) from `conf/cpu_scaling.json`
+6. Run one extra CPU/GPU relift pass from config to survive vendor-side runtime refreshes
+7. Log CPU/GPU OC results
+8. Restore DRAM min freq floor via DVFSRC devfreq from `conf/dram.json`
+9. Export CPU OPP data from `opp_table` sysfs → `cpu_opp_table` file
+10. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
+11. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
+12. Write `gaming_monitor.sh` daemon script to `CONFIG_DIR`
+13. Launch background late-boot relift at T+45 s:
     - Re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor
-    - Applies thermal mitigation (CPU trip point raising + GPU cooling device lock) per saved mode
-    - Applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) to all UFS block devices
-    - Restores UFS controller settings (Write Booster)
-    - Starts `gaming_monitor.sh` daemon if `auto_gaming=1` and gaming apps are configured
+    - Applies thermal mitigation (CPU trip point raising + GPU cooling device lock) per saved mode from `conf/thermal.json`
+    - Applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) from `conf/io.json` to all UFS block devices
+    - Restores UFS controller settings (Write Booster) from `conf/ufs.json`
+    - Starts `gaming_monitor.sh` daemon if `auto_gaming=1` in `conf/profile.json` and gaming apps are configured
 
-### Config Persistence
+### Config Persistence (v9.0 — Split Files)
 
-The WebUI saves OC settings to `/data/adb/modules/f8_kpm_oc_manager/oc_config.json` as a flat JSON.
-On first install the bundled `oc_config.default.json` is seeded as the initial config;
+The WebUI saves OC settings to per-section JSON files under `/data/adb/modules/f8_kpm_oc_manager/conf/`.
+On first install, `conf.default/*.json` is copied to `conf/` as the initial config;
 subsequent module updates preserve the user's customized values.
+Legacy single-file `oc_config.json` is auto-migrated to split files on first boot.
 
-```json
-{
-  "version": 9,
-  "cpu_oc_l_freq": 3800000, "cpu_oc_l_volt": 1050000,
-  "cpu_oc_b_freq": 3800000, "cpu_oc_b_volt": 1100000,
-  "cpu_oc_p_freq": 4000000, "cpu_oc_p_volt": 1150000,
-  "gpu_oc_freq": 1900000,   "gpu_oc_volt": 115040, "gpu_oc_vsram": 95000,
-  "cpu_max_0": 3800000, "cpu_min_0": 480000,
-  "cpu_max_4": 3800000, "cpu_min_4": 400000,
-  "cpu_max_7": 4000000, "cpu_min_7": 400000,
-  "dram_min_freq": 6400000000,
-  "io_read_ahead_kb": 2048, "io_scheduler": "none",
-  "io_nomerges": 0, "io_rq_affinity": 2,
-  "io_iostats": 1, "io_add_random": 0,
-  "ufs_wb_on": 1,
-  "cpu_thermal_mode": 0, "gpu_thermal_mode": 0,
-  "power_mode": 1,
-  "auto_gaming": 0, "gaming_apps": ""
-}
+| File | Keys | Example |
+|------|------|---------|
+| `cpu_oc.json` | `cpu_oc_{l,b,p}_{freq,volt}` | `{"cpu_oc_p_freq":4000000,"cpu_oc_p_volt":1150000,...}` |
+| `gpu_oc.json` | `gpu_oc_{freq,volt,vsram}` | `{"gpu_oc_freq":1900000,"gpu_oc_volt":115040,"gpu_oc_vsram":95000}` |
+| `cpu_scaling.json` | `cpu_{max,min}_{0,4,7}` | `{"cpu_max_0":3800000,"cpu_min_0":480000,...}` |
+| `dram.json` | `dram_min_freq` | `{"dram_min_freq":6400000000}` |
+| `io.json` | `io_{read_ahead_kb,scheduler,...}` | `{"io_read_ahead_kb":2048,"io_scheduler":"none",...}` |
+| `ufs.json` | `ufs_wb_on` | `{"ufs_wb_on":1}` |
+| `thermal.json` | `cpu_thermal_mode`, `gpu_thermal_mode` | `{"cpu_thermal_mode":0,"gpu_thermal_mode":0}` |
+| `profile.json` | `power_mode`, `auto_gaming`, `gaming_apps` | `{"power_mode":1,"auto_gaming":0,"gaming_apps":""}` |
+
+All files are minified single-line JSON (no spaces around colons) for compatibility with lightweight `grep`-based parsing — no `jq` needed.
+
+```bash
+# service.sh reads values with:
+json_int() { grep -o "\"$1\":[0-9]*" "$2" | head -1 | grep -o '[0-9]*$'; }
+json_str() { grep -o "\"$1\":\"[^\"]*\"" "$2" | head -1 | sed 's/.*:"\(.*\)"/\1/'; }
+
+# Example:
+json_int cpu_oc_p_freq /data/adb/modules/f8_kpm_oc_manager/conf/cpu_oc.json
+# → 4000000
 ```
-
-`service.sh` parses this with lightweight `grep` (no `jq` needed) and passes values as `insmod` params.
 
 ## Multi-Language Support (i18n)
 
@@ -155,7 +169,7 @@ immediately before every GPU DVFS commit, eliminating the window where GPUEB
 could revert the voltage between relift cycles.
 The kretprobe on `gpufreq_commit` (v8.0) additionally reprograms MFG PLL CON1
 when GPUEB commits an above-stock OC frequency.
-Default target on boot: **1900 MHz @ 115040 (= 1150.4 mV)** (bare module parameter default; `oc_config.json` overrides this on boot).
+Default target on boot: **1900 MHz @ 115040 (= 1150.4 mV)** (bare module parameter default; `conf/gpu_oc.json` overrides this on boot).
 
 ```bash
 echo 1900000 > /sys/module/kpm_oc/parameters/gpu_target_freq
@@ -260,7 +274,7 @@ The WebUI's Thermal section (in CPU/GPU cards) provides per-component thermal co
 | Soft (1) | Lock GPU/Mali/GED cooling devices to state 0 (prevent frequency capping) |
 | Hard (2) | Soft + pin GPU at OPP index 0 via `fix_target_opp_index` |
 
-Settings are persisted in `oc_config.json` (`cpu_thermal_mode`, `gpu_thermal_mode`) and restored on boot via the late-boot relift pass.
+Settings are persisted in `conf/thermal.json` (`cpu_thermal_mode`, `gpu_thermal_mode`) and restored on boot via the late-boot relift pass.
 
 ## Power Profiles
 
@@ -318,7 +332,7 @@ dumpsys window | grep mCurrentFocus | tail -1 | sed 's|.*{[^ ]* [^ ]* ||;s|/.*||
 
 ## Storage / UFS Tuning
 
-The WebUI's Storage tab provides per-device block queue tuning and UFS controller settings. All settings are persisted in `oc_config.json` and restored on boot via the late-boot relift pass (T+45 s).
+The WebUI's Storage tab provides per-device block queue tuning and UFS controller settings. All settings are persisted in `conf/io.json` and `conf/ufs.json`, and restored on boot via the late-boot relift pass (T+45 s).
 
 ### Block Queue Parameters
 
