@@ -327,6 +327,7 @@
     const entries = [];
     const lines = raw.trim().split('\n');
 
+    let kernelIdx = 0;
     for (const line of lines) {
       const m = line.match(/freq:\s*(\d+),\s*volt:\s*(\d+)(?:,\s*vsram:\s*(\d+))?/);
       if (!m) continue;
@@ -341,8 +342,10 @@
         vsram: vsram * 10,     // Convert to µV
         origFreq: freq,
         origVolt: volt * 10,
+        kernelIdx: kernelIdx,  // OPP index in kernel table (descending order)
         modified: false, isNew: false, removing: false,
       });
+      kernelIdx++;
     }
 
     entries.sort((a, b) => a.freq - b.freq);
@@ -352,6 +355,7 @@
   function parseGpuPreParsed(raw) {
     const entries = [];
     const items = raw.trim().split('|').filter(s => s.length > 0);
+    let kernelIdx = 0;
     for (const item of items) {
       const parts = item.split(':');
       if (parts.length !== 4 || parts[0] !== 'GPU') continue;
@@ -361,8 +365,10 @@
       entries.push({
         freq, volt, vsram: 0,
         origFreq: freq, origVolt: volt,
+        kernelIdx: kernelIdx,  // OPP index in kernel table (descending order)
         modified: false, isNew: false, removing: false,
       });
+      kernelIdx++;
     }
     entries.sort((a, b) => a.freq - b.freq);
     return entries;
@@ -1260,10 +1266,20 @@
       cpuMap = parseCpuOppTable(cpuRes.stdout);
     }
 
-    if (cpuMap.size === 0) {
+    /* Fall back to cached file if sysfs data is sparse (MCUPM rewrites CSRAM
+     * after boot, reducing LUT to 1 entry per cluster). The cpu_opp_table file
+     * was saved by service.sh at boot when CSRAM still had the full table. */
+    let cpuSparse = false;
+    if (cpuMap.size > 0) {
+      for (const [, list] of cpuMap) {
+        if (list.length <= 1) { cpuSparse = true; break; }
+      }
+    }
+    if (cpuMap.size === 0 || cpuSparse) {
       const fileRes = await exec(`cat ${CPU_OPP_FILE} 2>/dev/null`);
       if (fileRes.stdout.trim().length > 5 && fileRes.stdout.includes('CPU:')) {
-        cpuMap = parseCpuOppTable(fileRes.stdout);
+        const fileMap = parseCpuOppTable(fileRes.stdout);
+        if (fileMap.size > 0) cpuMap = fileMap;
       }
     }
 
@@ -2215,14 +2231,18 @@
         if (ci === undefined) continue;
         const activeEntries = cluster.entries.filter(e => !e.removing);
         const entryCount = activeEntries.length;
+        let activeIdx = 0;
         for (let i = 0; i < cluster.entries.length; i++) {
           const entry = cluster.entries[i];
-          if (!entry.removing && (entry.modified || entry.isNew) &&
+          if (entry.removing) continue;
+          if ((entry.modified || entry.isNew) &&
               entry.volt !== entry.origVolt) {
-            /* Reverse index: WebUI ascending [0]=lowest → CSRAM descending [N-1] */
-            const lutIdx = entryCount - 1 - i;
+            /* Reverse index: WebUI ascending [0]=lowest → CSRAM descending [N-1]
+             * Use activeIdx (skips removing entries) for correct mapping. */
+            const lutIdx = entryCount - 1 - activeIdx;
             voltOverrides.push(`${ci}:${lutIdx}:${entry.volt}`);
           }
+          activeIdx++;
         }
       }
       if (voltOverrides.length > 0) {
@@ -2258,16 +2278,19 @@
     /* GPU: per-OPP voltage overrides via kernel module (direct memory patch).
      * Bypasses driver fix_custom_freq_volt validation (DVFSState, volt clamp).
      * Format: "opp_idx:volt:vsram opp_idx:volt:vsram ..."
+     * NOTE: Kernel OPP table is DESCENDING (idx 0 = highest freq), but WebUI
+     * entries are sorted ASCENDING. Use entry.kernelIdx for correct mapping.
      */
     {
       const voltOverrides = [];
       for (let i = 0; i < state.gpuEntries.length; i++) {
         const entry = state.gpuEntries[i];
-        if (!entry.removing && (entry.modified || entry.isNew) &&
-            entry.volt !== entry.origVolt) {
+        if (!entry.removing && !entry.isNew && entry.modified &&
+            entry.volt !== entry.origVolt &&
+            entry.kernelIdx !== undefined) {
           const voltStep = Math.round(entry.volt / 10);
           const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
-          voltOverrides.push(`${i}:${voltStep}:${vsramStep}`);
+          voltOverrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
         }
       }
       if (voltOverrides.length > 0) {
@@ -2426,25 +2449,88 @@
 
     const esc = (s) => s.replace(/'/g, "'\\''");
 
-    /* CPU OC */
-    const cpuOcJson = JSON.stringify({
-      cpu_oc_l_freq:  oc[0] || 0,
-      cpu_oc_l_volt:  oc[1] || 0,
-      cpu_oc_b_freq:  oc[2] || 0,
-      cpu_oc_b_volt:  oc[3] || 0,
-      cpu_oc_p_freq:  oc[4] || 0,
-      cpu_oc_p_volt:  oc[5] || 0,
-    });
-    await exec(`printf '%s' '${esc(cpuOcJson)}' > ${CONF_CPU_OC}`);
+    /* CPU OC — save OC target + full OPP table with modified voltages.
+     * Cluster entries are stored in ASCENDING freq order (WebUI convention).
+     * service.sh reads cpu_oc_*_freq/volt for the top OC target, and
+     * cpu_opp_overrides[] for per-LUT voltage overrides (cluster:lutIdx:volt).
+     */
+    {
+      const clusterParamMap = { 0: 'l', 4: 'b', 7: 'p' };
+      const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
+      const cpuOcObj = {
+        cpu_oc_l_freq:  oc[0] || 0,
+        cpu_oc_l_volt:  oc[1] || 0,
+        cpu_oc_b_freq:  oc[2] || 0,
+        cpu_oc_b_volt:  oc[3] || 0,
+        cpu_oc_p_freq:  oc[4] || 0,
+        cpu_oc_p_volt:  oc[5] || 0,
+        cpu_opp_overrides: [],
+        cpu_opp_table: {},
+      };
 
-    /* GPU OC */
-    const gpuOcJson = JSON.stringify({
-      gpu_oc_freq:    oc[6] || 0,
-      gpu_oc_volt:    oc[7] || 0,
-      gpu_oc_vsram:   oc[8] || 0,
-    });
-    await exec(`printf '%s' '${esc(gpuOcJson)}' > ${CONF_GPU_OC}`);
+      for (const cluster of state.cpuClusters) {
+        const ci = clusterIdxMap[cluster.id];
+        if (ci === undefined) continue;
+        const activeEntries = cluster.entries.filter(e => !e.removing);
+        const entryCount = activeEntries.length;
 
+        /* Save full OPP table per cluster (ascending freq) */
+        cpuOcObj.cpu_opp_table[cluster.id] = activeEntries.map(e => ({
+          freq: e.freq, volt: e.volt,
+        }));
+
+        /* Save per-LUT voltage overrides for entries with modified voltage */
+        for (let ai = 0; ai < activeEntries.length; ai++) {
+          const entry = activeEntries[ai];
+          if ((entry.modified || entry.isNew) && entry.volt !== entry.origVolt) {
+            const lutIdx = entryCount - 1 - ai;
+            cpuOcObj.cpu_opp_overrides.push(`${ci}:${lutIdx}:${entry.volt}`);
+          }
+        }
+      }
+
+      const cpuOcJson = JSON.stringify(cpuOcObj);
+      await exec(`printf '%s' '${esc(cpuOcJson)}' > ${CONF_CPU_OC}`);
+    }
+
+    /* GPU OC — save OC target + full OPP table with modified voltages.
+     * GPU entries use kernelIdx (descending: 0=highest freq in kernel table).
+     * service.sh reads gpu_oc_freq/volt/vsram for the top OC target, and
+     * gpu_opp_overrides[] for per-OPP voltage overrides (kernelIdx:volt:vsram).
+     */
+    {
+      const gpuOcObj = {
+        gpu_oc_freq:    oc[6] || 0,
+        gpu_oc_volt:    oc[7] || 0,
+        gpu_oc_vsram:   oc[8] || 0,
+        gpu_opp_overrides: [],
+        gpu_opp_table: [],
+      };
+
+      const activeGpu = state.gpuEntries.filter(e => !e.removing);
+
+      /* Save full GPU OPP table (ascending freq — WebUI convention) */
+      gpuOcObj.gpu_opp_table = activeGpu.map(e => ({
+        freq: e.freq,
+        volt: e.volt,
+        vsram: e.vsram || 0,
+        kernelIdx: e.kernelIdx,
+      }));
+
+      /* Save per-OPP voltage overrides for modified entries */
+      for (const entry of activeGpu) {
+        if (!entry.isNew && entry.modified &&
+            entry.volt !== entry.origVolt &&
+            entry.kernelIdx !== undefined) {
+          const voltStep = Math.round(entry.volt / 10);
+          const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
+          gpuOcObj.gpu_opp_overrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
+        }
+      }
+
+      const gpuOcJson = JSON.stringify(gpuOcObj);
+      await exec(`printf '%s' '${esc(gpuOcJson)}' > ${CONF_GPU_OC}`);
+    }
     /* CPU Scaling */
     const scalingObj = {};
     for (const cluster of state.cpuClusters) {

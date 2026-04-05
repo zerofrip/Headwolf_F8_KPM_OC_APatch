@@ -49,6 +49,13 @@ json_str() {
     grep -o "\"$1\":\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'
 }
 
+# Extract JSON array of strings as space-separated values
+# e.g. "key":["a","b","c"] → "a b c"
+json_arr() {
+    grep -o "\"$1\":\[\"[^]]*\]" "$2" 2>/dev/null | \
+        sed 's/.*\[//;s/\]//;s/"//g;s/,/ /g'
+}
+
 # ─── Migrate from legacy single-file config to split files ────────────────
 migrate_legacy_config() {
     [ -f "${OLD_CONFIG_FILE}" ] || return 0
@@ -166,6 +173,16 @@ if [ -f "${CONF_CPU_OC}" ]; then
     fi
 fi
 
+# ─── Restore CPU voltage overrides from config ───────────────────────────
+if [ -f "${CONF_CPU_OC}" ]; then
+    cpu_ov=$(json_arr cpu_opp_overrides "${CONF_CPU_OC}")
+    if [ -n "${cpu_ov}" ]; then
+        echo "${cpu_ov}" > /sys/module/kpm_oc/parameters/cpu_volt_override 2>/dev/null
+        cpu_ov_res=$(cat /sys/module/kpm_oc/parameters/cpu_volt_ov_result 2>/dev/null)
+        logi "CPU volt overrides restored: ${cpu_ov_res}"
+    fi
+fi
+
 # GPU OC is applied automatically on module load (kpm_oc_init calls set_gpu_oc()).
 # CPU OC is applied if config params were passed via insmod.
 GPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null)
@@ -189,6 +206,16 @@ if [ -f "${CONF_GPU_OC}" ]; then
         else
             logi "GPU relift pass: devfreq max_freq not writable"
         fi
+    fi
+fi
+
+# ─── Restore GPU voltage overrides from config ───────────────────────────
+if [ -f "${CONF_GPU_OC}" ]; then
+    gpu_ov=$(json_arr gpu_opp_overrides "${CONF_GPU_OC}")
+    if [ -n "${gpu_ov}" ]; then
+        echo "${gpu_ov}" > /sys/module/kpm_oc/parameters/gpu_volt_override 2>/dev/null
+        gpu_ov_res=$(cat /sys/module/kpm_oc/parameters/gpu_volt_ov_result 2>/dev/null)
+        logi "GPU volt overrides restored: ${gpu_ov_res}"
     fi
 fi
 
@@ -339,6 +366,18 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
             echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
     done
     echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+
+    # Re-apply voltage overrides after late relift
+    if [ -f "${CONF_CPU_OC}" ]; then
+        cpu_ov=$(grep -o '"cpu_opp_overrides":\["[^]]*\]' "${CONF_CPU_OC}" 2>/dev/null | \
+            sed 's/.*\[//;s/\]//;s/"//g;s/,/ /g')
+        [ -n "${cpu_ov}" ] && echo "${cpu_ov}" > /sys/module/kpm_oc/parameters/cpu_volt_override 2>/dev/null
+    fi
+    if [ -f "${CONF_GPU_OC}" ]; then
+        gpu_ov=$(grep -o '"gpu_opp_overrides":\["[^]]*\]' "${CONF_GPU_OC}" 2>/dev/null | \
+            sed 's/.*\[//;s/\]//;s/"//g;s/,/ /g')
+        [ -n "${gpu_ov}" ] && echo "${gpu_ov}" > /sys/module/kpm_oc/parameters/gpu_volt_override 2>/dev/null
+    fi
 
     # ─── Thermal mitigation ───────────────────────────────────────────────
     cpu_thermal_mode=$(json_int cpu_thermal_mode "${CONF_THERMAL}")
