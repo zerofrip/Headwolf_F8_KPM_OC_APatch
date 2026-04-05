@@ -4,3 +4,4 @@ version=v9.1
 versionCode=15
 author=zerofrip
 description=CPU/GPU/DRAM/IO OC Manager for Dimensity 8300. CSRAM LUT reader + gpufreqv2 + DVFSRC devfreq + UFS block queue & ufshcd controller tuning. WebUI with editable freq/volt tables.
+webRoot=webroot
