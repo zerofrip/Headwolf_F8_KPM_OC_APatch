@@ -261,6 +261,12 @@ DRAM_DF="/sys/class/devfreq/mtk-dvfsrc-devfreq"
 echo $$ > "$PID_F"
 BOOSTED=0
 
+# Escape cgroup v2 freezer — Android freezes background UIDs
+echo $$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null
+echo $$ > /dev/cpuset/cgroup.procs 2>/dev/null
+echo $$ > /dev/blkio/cgroup.procs 2>/dev/null
+echo $$ > /dev/cpuctl/cgroup.procs 2>/dev/null
+
 _ji() { grep -o "\"$1\":[0-9]*" "$2" 2>/dev/null | head -1 | grep -o '[0-9]*$'; }
 _js() { grep -o "\"$1\":\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'; }
 
@@ -268,7 +274,7 @@ while true; do
     games=$(_js gaming_apps "$CONF/profile.json")
     [ -z "$games" ] && sleep 5 && continue
 
-    FG=$(dumpsys activity activities 2>/dev/null | grep 'mResumedActivity' | head -1 | sed 's|.*u0 ||;s|/.*||;s| .*||')
+    FG=$(dumpsys activity activities 2>/dev/null | grep 'ResumedActivity' | head -1 | sed 's|.*u0 ||;s|/.*||;s| .*||')
     [ -z "$FG" ] && FG=$(dumpsys window 2>/dev/null | grep 'mCurrentFocus' | tail -1 | sed 's|.*{[^ ]* [^ ]* ||;s|/.*||;s|}.*||')
 
     IS_GAMING=0

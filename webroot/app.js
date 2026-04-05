@@ -277,7 +277,7 @@
         stderr: '',
       };
     }
-    if (cmd.includes('mResumedActivity') || cmd.includes('mCurrentFocus')) {
+    if (cmd.includes('ResumedActivity') || cmd.includes('mCurrentFocus')) {
       return { errno: 0, stdout: 'com.android.launcher3', stderr: '' };
     }
     if (cmd.includes('IconExtractor')) {
@@ -1801,7 +1801,7 @@
     const ag = state.profile.autoGaming;
     const fgCmd =
       'FG=""; ' +
-      'FG=$(dumpsys activity activities 2>/dev/null | grep "mResumedActivity" | head -1 | ' +
+      'FG=$(dumpsys activity activities 2>/dev/null | grep "ResumedActivity" | head -1 | ' +
       "sed 's|.*u0 ||;s|/.*||;s| .*||'); " +
       '[ -z "$FG" ] && FG=$(dumpsys window 2>/dev/null | grep "mCurrentFocus" | tail -1 | ' +
       "sed 's|.*{[^ ]* [^ ]* ||;s|/.*||;s|}.*||'); " +
