@@ -1336,6 +1336,17 @@
       try {
         const gpuConf = JSON.parse(gpuConfRes.stdout.trim());
         if (gpuConf.gpu_opp_table && gpuConf.gpu_opp_table.length > 0) {
+          /* Build set of saved kernelIdx values to detect deletions */
+          const savedGpuIdxSet = new Set(gpuConf.gpu_opp_table.map(s => s.kernelIdx));
+
+          /* Mark kernel-reported entries not in saved config as removing */
+          for (const entry of state.gpuEntries) {
+            if (!savedGpuIdxSet.has(entry.kernelIdx)) {
+              entry.removing = true;
+            }
+          }
+
+          /* Restore voltage overrides for saved entries */
           for (const saved of gpuConf.gpu_opp_table) {
             if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
               const entry = state.gpuEntries.find(e => e.kernelIdx === saved.kernelIdx);
@@ -1360,6 +1371,18 @@
           for (const cluster of state.cpuClusters) {
             const savedEntries = cpuConf.cpu_opp_table[cluster.id];
             if (!savedEntries || !Array.isArray(savedEntries)) continue;
+
+            /* Build set of saved freq values to detect deletions */
+            const savedFreqSet = new Set(savedEntries.map(s => s.freq));
+
+            /* Mark kernel-reported entries not in saved config as removing */
+            for (const entry of cluster.entries) {
+              if (!savedFreqSet.has(entry.freq)) {
+                entry.removing = true;
+              }
+            }
+
+            /* Restore voltage overrides for saved entries */
             for (const saved of savedEntries) {
               if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
                 const entry = cluster.entries.find(e => e.freq === saved.freq);
