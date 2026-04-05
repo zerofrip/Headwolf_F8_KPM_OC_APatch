@@ -1324,6 +1324,57 @@
     state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
     state.originalGpu = JSON.parse(JSON.stringify(state.gpuEntries));
 
+    /* --- Restore saved voltage overrides from config ---
+     * After loading live OPP data from kernel/procfs, read the saved config
+     * to restore user-modified voltages. This handles page reloads and GPUEB/
+     * MCUPM rewriting kernel tables back to stock values.
+     */
+
+    /* GPU: restore from gpu_oc.json gpu_opp_table */
+    const gpuConfRes = await exec(`cat ${CONF_GPU_OC} 2>/dev/null`);
+    if (gpuConfRes.stdout.trim()) {
+      try {
+        const gpuConf = JSON.parse(gpuConfRes.stdout.trim());
+        if (gpuConf.gpu_opp_table && gpuConf.gpu_opp_table.length > 0) {
+          for (const saved of gpuConf.gpu_opp_table) {
+            if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
+              const entry = state.gpuEntries.find(e => e.kernelIdx === saved.kernelIdx);
+              if (entry) {
+                entry.origVolt = saved.origVolt;
+                entry.volt = saved.volt;
+                if (saved.vsram) entry.vsram = saved.vsram;
+                entry.modified = true;
+              }
+            }
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+
+    /* CPU: restore from cpu_oc.json cpu_opp_table */
+    const cpuConfRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
+    if (cpuConfRes.stdout.trim()) {
+      try {
+        const cpuConf = JSON.parse(cpuConfRes.stdout.trim());
+        if (cpuConf.cpu_opp_table) {
+          for (const cluster of state.cpuClusters) {
+            const savedEntries = cpuConf.cpu_opp_table[cluster.id];
+            if (!savedEntries || !Array.isArray(savedEntries)) continue;
+            for (const saved of savedEntries) {
+              if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
+                const entry = cluster.entries.find(e => e.freq === saved.freq);
+                if (entry) {
+                  entry.origVolt = saved.origVolt;
+                  entry.volt = saved.volt;
+                  entry.modified = true;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+
     // --- Thermal Data ---
     await loadThermalData();
     // Read saved thermal modes from config
@@ -2476,7 +2527,7 @@
 
         /* Save full OPP table per cluster (ascending freq) */
         cpuOcObj.cpu_opp_table[cluster.id] = activeEntries.map(e => ({
-          freq: e.freq, volt: e.volt,
+          freq: e.freq, volt: e.volt, origVolt: e.origVolt,
         }));
 
         /* Save per-LUT voltage overrides for entries with modified voltage */
@@ -2513,6 +2564,7 @@
       gpuOcObj.gpu_opp_table = activeGpu.map(e => ({
         freq: e.freq,
         volt: e.volt,
+        origVolt: e.origVolt,
         vsram: e.vsram || 0,
         kernelIdx: e.kernelIdx,
       }));
