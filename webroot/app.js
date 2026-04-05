@@ -435,7 +435,8 @@
     const name = CLUSTER_NAMES[cluster.id] || `Policy ${cluster.id}`;
     const core = CLUSTER_CORES[cluster.id] || '';
     const entries = cluster.entries;
-    const maxFreq = entries.length > 0 ? Math.max(...entries.map(e => e.freq)) : 0;
+    const activeEntries = entries.filter(e => !e.removing);
+    const maxFreq = activeEntries.length > 0 ? Math.max(...activeEntries.map(e => e.freq)) : 0;
     const maxFreqStr = maxFreq > 0 ? formatFreqKHz(maxFreq) : '—';
 
     const freqOptions = (cluster.freqs || []).map(f =>
@@ -546,7 +547,8 @@
   /* ─── Render GPU Card ─────────────────────────────────────────────── */
   function renderGpuCard() {
     const entries = state.gpuEntries;
-    const maxFreq = entries.length > 0 ? Math.max(...entries.map(e => e.freq)) : 0;
+    const activeEntries = entries.filter(e => !e.removing);
+    const maxFreq = activeEntries.length > 0 ? Math.max(...activeEntries.map(e => e.freq)) : 0;
     const maxFreqStr = maxFreq > 0 ? formatFreqKHz(maxFreq) : '—';
 
     let html = `
@@ -2225,10 +2227,12 @@
       /* Apply CPU OC when:
        * - The max entry is a newly added OPP (isNew), OR
        * - The max entry's freq or voltage was modified, OR
-       * - The max entry's freq is above stock origMax (covers re-apply after reload)
+       * - The max freq differs from stock origMax (top deleted or OC added)
+       * - Any entry was removed (need to update OC target to new top)
        * The kernel module patches CSRAM LUT[0] + cpufreq policy max.
        */
-      if (maxEntry && (maxEntry.isNew || maxEntry.modified || maxEntry.freq > origMax)) {
+      const anyRemoving = cluster.entries.some(e => e.removing);
+      if (maxEntry && (maxEntry.isNew || maxEntry.modified || maxEntry.freq !== origMax || anyRemoving)) {
         await execChecked(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`, `CPU ${key} freq`);
         await execChecked(`echo ${maxEntry.volt} > ${KS_PARAMS}cpu_oc_${key}_volt`, `CPU ${key} volt`);
         cpuOcNeeded = true;
@@ -2337,7 +2341,8 @@
       ? Math.max(...state.originalGpu.map(e => e.freq))
       : 0;
 
-    if (gpuMax && (gpuMax.isNew || gpuMax.modified || gpuMax.freq > origGpuMax)) {
+    const anyGpuRemoving = state.gpuEntries.some(e => e.removing);
+    if (gpuMax && (gpuMax.isNew || gpuMax.modified || gpuMax.freq !== origGpuMax || anyGpuRemoving)) {
       /* gpu_target_* expects OPP-table units (gpufreqv2 value, not µV) */
       const voltStep = Math.round(gpuMax.volt / 10);
       const vsramStep = gpuMax.vsram > 0 ? Math.round(gpuMax.vsram / 10) : voltStep;
@@ -2505,19 +2510,29 @@
 
   /* ─── Save Config (per-section split files) ──────────────────────────── */
   async function saveConfig() {
-    /* Read current kpm_oc OC params from sysfs (post-apply state) */
-    const ocRaw = await exec(
-      `echo "$(cat ${KS_PARAMS}cpu_oc_l_freq 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}cpu_oc_l_volt 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}cpu_oc_b_freq 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}cpu_oc_b_volt 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}cpu_oc_p_freq 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}cpu_oc_p_volt 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}gpu_target_freq 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}gpu_target_volt 2>/dev/null || echo 0)` +
-      ` $(cat ${KS_PARAMS}gpu_target_vsram 2>/dev/null || echo 0)"`
-    );
-    const oc = ocRaw.stdout.trim().split(/\s+/).map(v => parseInt(v, 10) || 0);
+    /* Derive OC targets from state (active top entries) instead of sysfs,
+     * so deletions and modifications are always reflected in saved config. */
+    const clusterParamKeys = { 0: 'l', 4: 'b', 7: 'p' };
+    const clusterOc = {};
+    for (const cluster of state.cpuClusters) {
+      const key = clusterParamKeys[cluster.id];
+      if (!key) continue;
+      const active = cluster.entries.filter(e => !e.removing);
+      const top = active.length > 0
+        ? active.reduce((m, e) => e.freq > m.freq ? e : m)
+        : null;
+      clusterOc[key] = top ? { freq: top.freq, volt: top.volt } : { freq: 0, volt: 0 };
+    }
+
+    const activeGpuForSave = state.gpuEntries.filter(e => !e.removing);
+    const gpuTopForSave = activeGpuForSave.length > 0
+      ? activeGpuForSave.reduce((m, e) => e.freq > m.freq ? e : m)
+      : null;
+    const gpuOcFreq = gpuTopForSave ? gpuTopForSave.freq : 0;
+    const gpuOcVolt = gpuTopForSave ? Math.round(gpuTopForSave.volt / 10) : 0;
+    const gpuOcVsram = gpuTopForSave
+      ? (gpuTopForSave.vsram > 0 ? Math.round(gpuTopForSave.vsram / 10) : gpuOcVolt)
+      : 0;
 
     await exec(`mkdir -p ${CONF_DIR}`);
 
@@ -2529,15 +2544,14 @@
      * cpu_opp_overrides[] for per-LUT voltage overrides (cluster:lutIdx:volt).
      */
     {
-      const clusterParamMap = { 0: 'l', 4: 'b', 7: 'p' };
       const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
       const cpuOcObj = {
-        cpu_oc_l_freq:  oc[0] || 0,
-        cpu_oc_l_volt:  oc[1] || 0,
-        cpu_oc_b_freq:  oc[2] || 0,
-        cpu_oc_b_volt:  oc[3] || 0,
-        cpu_oc_p_freq:  oc[4] || 0,
-        cpu_oc_p_volt:  oc[5] || 0,
+        cpu_oc_l_freq:  clusterOc.l ? clusterOc.l.freq : 0,
+        cpu_oc_l_volt:  clusterOc.l ? clusterOc.l.volt : 0,
+        cpu_oc_b_freq:  clusterOc.b ? clusterOc.b.freq : 0,
+        cpu_oc_b_volt:  clusterOc.b ? clusterOc.b.volt : 0,
+        cpu_oc_p_freq:  clusterOc.p ? clusterOc.p.freq : 0,
+        cpu_oc_p_volt:  clusterOc.p ? clusterOc.p.volt : 0,
         cpu_opp_overrides: [],
         cpu_opp_table: {},
       };
@@ -2574,9 +2588,9 @@
      */
     {
       const gpuOcObj = {
-        gpu_oc_freq:    oc[6] || 0,
-        gpu_oc_volt:    oc[7] || 0,
-        gpu_oc_vsram:   oc[8] || 0,
+        gpu_oc_freq:    gpuOcFreq,
+        gpu_oc_volt:    gpuOcVolt,
+        gpu_oc_vsram:   gpuOcVsram,
         gpu_opp_overrides: [],
         gpu_opp_table: [],
       };
