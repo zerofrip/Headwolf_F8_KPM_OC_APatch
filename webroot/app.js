@@ -317,8 +317,25 @@
       });
     }
 
-    for (const [, list] of cpuMap) {
+    for (const [policy, list] of cpuMap) {
       list.sort((a, b) => a.freq - b.freq);
+      /* Deduplicate by frequency — can happen when OC patches LUT[0] to
+       * an existing freq (e.g. after deleting the top OPP entry).
+       * Keep the entry with the higher voltage (the OC-patched one). */
+      const deduped = [];
+      const seenFreq = new Set();
+      for (const e of list) {
+        if (seenFreq.has(e.freq)) {
+          const prev = deduped.find(d => d.freq === e.freq);
+          if (prev && e.volt > prev.volt) {
+            Object.assign(prev, e);
+          }
+          continue;
+        }
+        seenFreq.add(e.freq);
+        deduped.push(e);
+      }
+      cpuMap.set(policy, deduped);
     }
     return cpuMap;
   }
