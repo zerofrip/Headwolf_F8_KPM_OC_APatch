@@ -1,1 +1,1 @@
-{"ufs_wb_on":1}
+{"ufs_wb_on":1,"ufs_clkgate_enable":1,"ufs_clkgate_delay_ms":10,"ufs_auto_hibern8":0,"ufs_rpm_lvl":3,"ufs_spm_lvl":3}

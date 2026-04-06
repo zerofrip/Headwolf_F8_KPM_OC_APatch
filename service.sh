@@ -8,7 +8,7 @@ CONFIG_DIR="/data/adb/modules/f8_kpm_oc_manager"
 CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
 GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 CPU_RAW_FILE="${CONFIG_DIR}/cpu_raw_dump"
-UFS_HCI_PATH="/sys/devices/platform/11270000.ufshci"
+UFS_HCI_PATH="/sys/devices/platform/soc/112b0000.ufshci"
 
 # ─── Split config paths ──────────────────────────────────────────────────
 CONF_DIR="${CONFIG_DIR}/conf"
@@ -75,7 +75,8 @@ migrate_legacy_config() {
     printf '{"dram_min_freq":%s}\n' "$(_oi dram_min_freq)" > "${CONF_DRAM}"
     printf '{"io_read_ahead_kb":%s,"io_scheduler":"%s","io_nomerges":%s,"io_rq_affinity":%s,"io_iostats":%s,"io_add_random":%s}\n' \
         "$(_oi io_read_ahead_kb)" "$(_os io_scheduler)" "$(_oi io_nomerges)" "$(_oi io_rq_affinity)" "$(_oi io_iostats)" "$(_oi io_add_random)" > "${CONF_IO}"
-    printf '{"ufs_wb_on":%s}\n' "$(_oi ufs_wb_on)" > "${CONF_UFS}"
+    printf '{"ufs_wb_on":%s,"ufs_clkgate_enable":%s,"ufs_clkgate_delay_ms":%s,"ufs_auto_hibern8":%s,"ufs_rpm_lvl":%s,"ufs_spm_lvl":%s}\n' \
+        "$(_oi ufs_wb_on)" "$(_oi ufs_clkgate_enable)" "$(_oi ufs_clkgate_delay_ms)" "$(_oi ufs_auto_hibern8)" "$(_oi ufs_rpm_lvl)" "$(_oi ufs_spm_lvl)" > "${CONF_UFS}"
     printf '{"cpu_thermal_mode":%s,"gpu_thermal_mode":%s}\n' "$(_oi cpu_thermal_mode)" "$(_oi gpu_thermal_mode)" > "${CONF_THERMAL}"
     printf '{"power_mode":%s,"auto_gaming":%s,"gaming_apps":"%s"}\n' \
         "$(_oi power_mode)" "$(_oi auto_gaming)" "$(_os gaming_apps)" > "${CONF_PROFILE}"
@@ -461,8 +462,24 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
     # ─── UFS controller (ufshcd) settings ────────────────────────────────
     if [ -d "${UFS_HCI_PATH}" ]; then
         ufs_wb=$(json_int ufs_wb_on "${CONF_UFS}")
-        [ -n "${ufs_wb}" ] && echo "${ufs_wb}" > "${UFS_HCI_PATH}/wb_on" 2>/dev/null && \
+        ufs_cg=$(json_int ufs_clkgate_enable "${CONF_UFS}")
+        ufs_cd=$(json_int ufs_clkgate_delay_ms "${CONF_UFS}")
+        ufs_ah=$(json_int ufs_auto_hibern8 "${CONF_UFS}")
+        ufs_rpm=$(json_int ufs_rpm_lvl "${CONF_UFS}")
+        ufs_spm=$(json_int ufs_spm_lvl "${CONF_UFS}")
+        # Use printf|tee to avoid shell redirect O_CREAT issue on sysfs
+        [ -n "${ufs_wb}" ]  && printf '%s' "${ufs_wb}"  | tee "${UFS_HCI_PATH}/wb_on" > /dev/null 2>&1 && \
             logi "UFS Write Booster = ${ufs_wb}"
+        [ -n "${ufs_cg}" ]  && printf '%s' "${ufs_cg}"  | tee "${UFS_HCI_PATH}/clkgate_enable" > /dev/null 2>&1 && \
+            logi "UFS Clock Gating = ${ufs_cg}"
+        [ -n "${ufs_cd}" ]  && printf '%s' "${ufs_cd}"  | tee "${UFS_HCI_PATH}/clkgate_delay_ms" > /dev/null 2>&1 && \
+            logi "UFS CLK Gate Delay = ${ufs_cd} ms"
+        [ -n "${ufs_ah}" ]  && printf '%s' "${ufs_ah}"  | tee "${UFS_HCI_PATH}/auto_hibern8" > /dev/null 2>&1 && \
+            logi "UFS Auto Hibern8 = ${ufs_ah} us"
+        [ -n "${ufs_rpm}" ] && printf '%s' "${ufs_rpm}" | tee "${UFS_HCI_PATH}/rpm_lvl" > /dev/null 2>&1 && \
+            logi "UFS RPM Level = ${ufs_rpm}"
+        [ -n "${ufs_spm}" ] && printf '%s' "${ufs_spm}" | tee "${UFS_HCI_PATH}/spm_lvl" > /dev/null 2>&1 && \
+            logi "UFS SPM Level = ${ufs_spm}"
     fi
 
     # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────

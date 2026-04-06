@@ -42,7 +42,7 @@
     { value: 1, labelKey: 'storage.nom.no_front' },
     { value: 2, labelKey: 'storage.nom.no_merge' },
   ];
-  const UFS_HCI_GLOB = '/sys/devices/platform/11270000.ufshci';  // MT6897 primary UFSHCI
+  const UFS_HCI_GLOB = '/sys/devices/platform/soc/112b0000.ufshci';  // MT6897 primary UFSHCI
 
   const CPU_POLICIES = [0, 4, 7];
   const CLUSTER_NAMES = { 0: 'LITTLE (0-3)', 4: 'big (4-6)', 7: 'PRIME (7)' };
@@ -104,7 +104,11 @@
       wbOn: -1,          // Write Booster (-1=unknown, 0=off, 1=on)
       clkgateEnable: -1, // Clock gating (-1=unknown, 0=off, 1=on)
       clkgateDelay: 0,   // Clock gating delay (ms)
+      autoHibern8: -1,   // Auto Hibernate8 timer µs (-1=unknown, 0=off)
+      rpmLvl: -1,        // Runtime PM level (-1=unknown, 0-5)
+      spmLvl: -1,        // System PM level (-1=unknown, 0-5)
       ufsHciPath: '',    // resolved ufshci sysfs path
+      ufsVersion: '',    // e.g. "UFS 4.0" (read from device_descriptor/specification_version)
     },
     thermal: {
       cpuMode: 0,       // 0=off, 1=soft (trip +15°C), 2=hard (trip +30°C + lock cdevs)
@@ -829,7 +833,7 @@
           </div>
           <div class="storage-stat-item">
             <span class="storage-stat-label">${t('storage.ufs_type')}</span>
-            <span class="storage-stat-value muted">UFS 3.1</span>
+            <span class="storage-stat-value muted">${s.ufsVersion || 'UFS 4.0'}</span>
           </div>
         </div>
 
@@ -941,6 +945,21 @@
       </div>`;
 
     /* ─── UFS Controller Card ──────────────────────────────────────────── */
+    const PM_LVL_LABELS = [
+      '0 — Active/Active',
+      '1 — Active/Hibern8',
+      '2 — Sleep/Active',
+      '3 — Sleep/Hibern8',
+      '4 — PwrDown/Hibern8',
+      '5 — PwrDown/Off',
+    ];
+    const rpmOpts = PM_LVL_LABELS.map((lbl, i) =>
+      `<option value="${i}" ${i === s.rpmLvl ? 'selected' : ''}>${lbl}</option>`
+    ).join('');
+    const spmOpts = PM_LVL_LABELS.map((lbl, i) =>
+      `<option value="${i}" ${i === s.spmLvl ? 'selected' : ''}>${lbl}</option>`
+    ).join('');
+
     html += `
       <div class="card">
         <div class="card-header">
@@ -948,46 +967,96 @@
             <span class="icon">🔧</span>
             ${t('storage.ufs_controller')}
           </div>
-          <span class="card-badge storage">11270000</span>
+          <span class="card-badge storage">112b0000</span>
         </div>
 
         <div class="storage-status-grid">
           <div class="storage-stat-item">
-            <span class="storage-stat-label">${t('storage.write_booster')}</span>
-            <span class="storage-stat-value${s.wbOn === 1 ? '' : ' muted'}">${s.wbOn === -1 ? t('misc.na') : (s.wbOn ? t('misc.on') : t('misc.off'))}</span>
-          </div>
-          <div class="storage-stat-item">
-            <span class="storage-stat-label">${t('storage.clock_gating')}</span>
-            <span class="storage-stat-value muted">${s.clkgateEnable === -1 ? t('misc.na') : (s.clkgateEnable ? t('misc.on') : t('misc.off'))}</span>
-          </div>
-          <div class="storage-stat-item">
-            <span class="storage-stat-label">${t('storage.clk_gate_delay')}</span>
-            <span class="storage-stat-value muted">${s.clkgateDelay > 0 ? s.clkgateDelay + ' ms' : '—'}</span>
+            <span class="storage-stat-label">${t('storage.ufs_type')}</span>
+            <span class="storage-stat-value muted">${s.ufsVersion || 'UFS 4.0'}</span>
           </div>
           <div class="storage-stat-item">
             <span class="storage-stat-label">${t('storage.hci_address')}</span>
-            <span class="storage-stat-value muted" style="font-size:0.72rem">0x11270000</span>
+            <span class="storage-stat-value muted" style="font-size:0.72rem">0x112b0000</span>
           </div>
-        </div>`;
+        </div>
 
-    if (s.wbOn !== -1) {
-      html += `
+        <!-- Write Booster toggle -->
         <div class="config-row">
           <div>
             <div class="config-label">${t('storage.write_booster')}</div>
             <div class="config-hint">${t('storage.wb_hint')}</div>
           </div>
           <label class="toggle-switch">
-            <input type="checkbox" id="storage-wb-on" ${s.wbOn ? 'checked' : ''}
+            <input type="checkbox" id="ufs-wb-on" ${s.wbOn === 1 ? 'checked' : ''}
                    onchange="window.OC.onStorageToggle('wbOn', this.checked)">
             <span class="toggle-slider"></span>
           </label>
-        </div>`;
-    }
+        </div>
 
-    html += `
+        <!-- Clock Gating toggle -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">${t('storage.clock_gating')}</div>
+            <div class="config-hint">${t('storage.clk_gate_hint')}</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="ufs-clkgate" ${s.clkgateEnable === 1 ? 'checked' : ''}
+                   onchange="window.OC.onStorageToggle('clkgateEnable', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Clock Gate Delay -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">${t('storage.clk_gate_delay')}</div>
+            <div class="config-hint">${t('storage.clk_gate_delay_hint')}</div>
+          </div>
+          <input type="number" class="config-input" id="ufs-clkgate-delay"
+                 style="width:80px;text-align:center" min="1" max="1000"
+                 value="${s.clkgateDelay > 0 ? s.clkgateDelay : 10}"
+                 onchange="state.storage.clkgateDelay = parseInt(this.value, 10) || 10">
+        </div>
+
+        <!-- Auto Hibernate8 -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">${t('storage.auto_hibern8')}</div>
+            <div class="config-hint">${t('storage.auto_hibern8_hint')}</div>
+          </div>
+          <input type="number" class="config-input" id="ufs-auto-hibern8"
+                 style="width:100px;text-align:center" min="0" max="100000"
+                 value="${s.autoHibern8 >= 0 ? s.autoHibern8 : 0}"
+                 onchange="state.storage.autoHibern8 = parseInt(this.value, 10) || 0">
+        </div>
+
+        <!-- Runtime PM Level -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">${t('storage.rpm_lvl')}</div>
+            <div class="config-hint">${t('storage.rpm_lvl_hint')}</div>
+          </div>
+          <select class="config-input freq-limit-select" id="ufs-rpm-lvl"
+                  onchange="state.storage.rpmLvl = parseInt(this.value, 10)">
+            ${rpmOpts}
+          </select>
+        </div>
+
+        <!-- System PM Level -->
+        <div class="config-row">
+          <div>
+            <div class="config-label">${t('storage.spm_lvl')}</div>
+            <div class="config-hint">${t('storage.spm_lvl_hint')}</div>
+          </div>
+          <select class="config-input freq-limit-select" id="ufs-spm-lvl"
+                  onchange="state.storage.spmLvl = parseInt(this.value, 10)">
+            ${spmOpts}
+          </select>
+        </div>
+
         <div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);line-height:1.4">
-          ℹ️ ${t('storage.info_hint')}
+          ℹ️ ${t('storage.ufs_info_hint')}
         </div>
       </div>`;
 
@@ -1511,17 +1580,34 @@
     const hciPath = hciRes.stdout.trim();
     if (hciPath) {
       state.storage.ufsHciPath = hciPath;
-      const [wbRes, cgEnRes, cgDelRes] = await Promise.all([
+      const [wbRes, cgEnRes, cgDelRes, specVerRes, ahRes, rpmRes, spmRes] = await Promise.all([
         exec(`cat ${hciPath}/wb_on 2>/dev/null`),
         exec(`cat ${hciPath}/clkgate_enable 2>/dev/null`),
         exec(`cat ${hciPath}/clkgate_delay_ms 2>/dev/null || cat ${hciPath}/clkgate_delay 2>/dev/null`),
+        exec(`cat ${hciPath}/device_descriptor/specification_version 2>/dev/null`),
+        exec(`cat ${hciPath}/auto_hibern8 2>/dev/null`),
+        exec(`cat ${hciPath}/rpm_lvl 2>/dev/null`),
+        exec(`cat ${hciPath}/spm_lvl 2>/dev/null`),
       ]);
       const wbVal = parseInt(wbRes.stdout.trim(), 10);
       const cgVal = parseInt(cgEnRes.stdout.trim(), 10);
       const cgDel = parseInt(cgDelRes.stdout.trim(), 10);
+      const ahVal = parseInt(ahRes.stdout.trim(), 10);
+      const rpmVal = parseInt(rpmRes.stdout.trim(), 10);
+      const spmVal = parseInt(spmRes.stdout.trim(), 10);
       state.storage.wbOn = isNaN(wbVal) ? -1 : wbVal;
       state.storage.clkgateEnable = isNaN(cgVal) ? -1 : cgVal;
       state.storage.clkgateDelay = isNaN(cgDel) ? 0 : cgDel;
+      state.storage.autoHibern8 = isNaN(ahVal) ? -1 : ahVal;
+      state.storage.rpmLvl = isNaN(rpmVal) ? -1 : rpmVal;
+      state.storage.spmLvl = isNaN(spmVal) ? -1 : spmVal;
+      const specRaw = specVerRes.stdout.trim(); // e.g. "0x0400"
+      if (specRaw) {
+        const v = parseInt(specRaw, 16);
+        const major = (v >> 8) & 0xFF;
+        const minor = (v >> 4) & 0x0F;
+        state.storage.ufsVersion = `UFS ${major}.${minor}`;
+      }
     }
 
     /* Use config values for user-selected fields; fall back to first device's current value */
@@ -1543,8 +1629,19 @@
     }
     const ufsCfgRes = await exec(`cat ${CONF_UFS} 2>/dev/null`);
     if (ufsCfgRes.stdout) {
-      const wbM = ufsCfgRes.stdout.match(/"ufs_wb_on":([0-9]+)/);
+      const uc = ufsCfgRes.stdout;
+      const wbM = uc.match(/"ufs_wb_on":([0-9]+)/);
       if (wbM) state.storage.wbOn = parseInt(wbM[1], 10);
+      const cgM = uc.match(/"ufs_clkgate_enable":([0-9]+)/);
+      if (cgM) state.storage.clkgateEnable = parseInt(cgM[1], 10);
+      const cdM = uc.match(/"ufs_clkgate_delay_ms":([0-9]+)/);
+      if (cdM) state.storage.clkgateDelay = parseInt(cdM[1], 10);
+      const ahM = uc.match(/"ufs_auto_hibern8":([0-9]+)/);
+      if (ahM) state.storage.autoHibern8 = parseInt(ahM[1], 10);
+      const rpM = uc.match(/"ufs_rpm_lvl":([0-9]+)/);
+      if (rpM) state.storage.rpmLvl = parseInt(rpM[1], 10);
+      const spM = uc.match(/"ufs_spm_lvl":([0-9]+)/);
+      if (spM) state.storage.spmLvl = parseInt(spM[1], 10);
     }
 
     /* If no config value, inherit from first device */
@@ -2507,12 +2604,21 @@
         }
       }
 
-      if (sto.ufsHciPath && sto.wbOn >= 0) {
-        await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
-      }
-
       await exec(`mkdir -p ${CONF_DIR}`);
       await saveStorageConfig();
+
+      /* --- UFS HCI controller settings (use printf|tee to avoid shell redirect O_CREAT issue) --- */
+      const hci = sto.ufsHciPath;
+      if (hci) {
+        const ufsWrites = [];
+        if (sto.wbOn >= 0)           ufsWrites.push(exec(`printf ${sto.wbOn} | tee ${hci}/wb_on 2>/dev/null`));
+        if (sto.clkgateEnable >= 0)  ufsWrites.push(exec(`printf ${sto.clkgateEnable} | tee ${hci}/clkgate_enable 2>/dev/null`));
+        if (sto.clkgateDelay > 0)    ufsWrites.push(exec(`printf ${sto.clkgateDelay} | tee ${hci}/clkgate_delay_ms 2>/dev/null`));
+        if (sto.autoHibern8 >= 0)    ufsWrites.push(exec(`printf ${sto.autoHibern8} | tee ${hci}/auto_hibern8 2>/dev/null`));
+        if (sto.rpmLvl >= 0)         ufsWrites.push(exec(`printf ${sto.rpmLvl} | tee ${hci}/rpm_lvl 2>/dev/null`));
+        if (sto.spmLvl >= 0)         ufsWrites.push(exec(`printf ${sto.spmLvl} | tee ${hci}/spm_lvl 2>/dev/null`));
+        await Promise.all(ufsWrites);
+      }
 
       /* Reload Storage section to reflect applied changes */
       await loadStorageData();
@@ -2775,11 +2881,21 @@
         }
       }
 
-      if (sto.ufsHciPath && sto.wbOn >= 0) {
-        await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
+      showToast(t('storage.toast', { ra: sto.readAheadKb, sched: sto.scheduler, rqa: sto.rqAffinity, nom: sto.nomerges }), 'success');
+
+      /* --- UFS HCI controller settings (printf|tee avoids shell redirect O_CREAT issue) --- */
+      const hci = sto.ufsHciPath;
+      if (hci) {
+        const ufsWrites = [];
+        if (sto.wbOn >= 0)           ufsWrites.push(exec(`printf ${sto.wbOn} | tee ${hci}/wb_on 2>/dev/null`));
+        if (sto.clkgateEnable >= 0)  ufsWrites.push(exec(`printf ${sto.clkgateEnable} | tee ${hci}/clkgate_enable 2>/dev/null`));
+        if (sto.clkgateDelay > 0)    ufsWrites.push(exec(`printf ${sto.clkgateDelay} | tee ${hci}/clkgate_delay_ms 2>/dev/null`));
+        if (sto.autoHibern8 >= 0)    ufsWrites.push(exec(`printf ${sto.autoHibern8} | tee ${hci}/auto_hibern8 2>/dev/null`));
+        if (sto.rpmLvl >= 0)         ufsWrites.push(exec(`printf ${sto.rpmLvl} | tee ${hci}/rpm_lvl 2>/dev/null`));
+        if (sto.spmLvl >= 0)         ufsWrites.push(exec(`printf ${sto.spmLvl} | tee ${hci}/spm_lvl 2>/dev/null`));
+        await Promise.all(ufsWrites);
       }
 
-      showToast(t('storage.toast', { ra: sto.readAheadKb, sched: sto.scheduler, rqa: sto.rqAffinity, nom: sto.nomerges }) + (sto.wbOn >= 0 ? ' WB=' + (sto.wbOn ? 'ON' : 'OFF') : ''), 'success');
       renderAll();
     }
 
@@ -2931,6 +3047,11 @@
 
     const ufsObj = {};
     if (state.storage.wbOn >= 0) ufsObj.ufs_wb_on = state.storage.wbOn;
+    if (state.storage.clkgateEnable >= 0) ufsObj.ufs_clkgate_enable = state.storage.clkgateEnable;
+    if (state.storage.clkgateDelay > 0) ufsObj.ufs_clkgate_delay_ms = state.storage.clkgateDelay;
+    if (state.storage.autoHibern8 >= 0) ufsObj.ufs_auto_hibern8 = state.storage.autoHibern8;
+    if (state.storage.rpmLvl >= 0) ufsObj.ufs_rpm_lvl = state.storage.rpmLvl;
+    if (state.storage.spmLvl >= 0) ufsObj.ufs_spm_lvl = state.storage.spmLvl;
     await exec(`printf '%s' '${_esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
   }
 
