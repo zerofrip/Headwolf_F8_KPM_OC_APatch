@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v9.0) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v10.1) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -14,17 +14,18 @@ APatch/KernelSU module (v9.0) providing CPU, GPU, DRAM, Storage overclocking/tun
 - **GPU PLL Direct Programming** *(v8.0)* — kretprobe on `gpufreq_commit` reprograms MFG PLL CON1 after GPUEB commits above-stock OC frequency
 - **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
 - **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
-- **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating)
+- **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating on/delay, auto-hibernate timer, RPM/SPM power levels). UFS version detected dynamically from `specification_version` (UFS 4.0 on this device). Uses `printf|tee` writes for ufshcd sysfs compatibility (`echo >` blocked by kernel `O_CREAT` check)
 - **Thermal Mitigation** *(v7.6)* — Per-component thermal controls: CPU trip point raising (Soft +15°C / Hard +30°C + cdev lock), GPU cooling device lock (Soft) and OPP pinning via `fix_target_opp_index` (Hard)
 - **Power Profiles** *(v8.0)* — Three selectable power modes (Battery Save / Normal / Performance) that control CPU scaling limits, DRAM floor, and thermal mitigation as a single preset
 - **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic Performance OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all power modes
-- **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile), i18n support (English / 日本語), language switcher in header: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, one-tap apply
+- **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile), i18n support (English / 日本語), language switcher in header: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, per-section Apply buttons
 - **Configuration Persistence** *(v9.0)* — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to per-section JSON files under `conf/`; automatically restored on boot via `insmod` params and sysfs writes. Legacy single-file `oc_config.json` is auto-migrated on first boot
+- **Per-Section Save/Apply** *(v10.1)* — Each WebUI section has its own Apply button that saves only that section's config and reloads the display. Changes are instantaneous without affecting other sections
 
 ## Structure
 
 ```text
-├── module.prop                     # APatch module metadata (v9.0)
+├── module.prop                     # APatch module metadata (v10.1)
 ├── kpm_oc.ko                       # Compiled kernel module (v8.0)
 ├── service.sh                      # Boot-time service (v9.0)
 ├── icon_extractor.dex              # DEX for app icon extraction (ActivityThread → Bitmap → base64)
@@ -46,7 +47,7 @@ APatch/KernelSU module (v9.0) providing CPU, GPU, DRAM, Storage overclocking/tun
     └── style.css                   # Dark glassmorphism design system
 ```
 
-## Boot Flow (`service.sh` v9.0)
+## Boot Flow (`service.sh` v10.1)
 
 1. **Migrate legacy config** — If `oc_config.json` exists and `conf/cpu_oc.json` does not, extract values into 8 split files under `conf/` and rename old file to `.bak.v9`
 2. **Seed defaults** — Copy any missing `conf/*.json` from `conf.default/`
@@ -84,7 +85,7 @@ Legacy single-file `oc_config.json` is auto-migrated to split files on first boo
 | `cpu_scaling.json` | `cpu_{max,min}_{0,4,7}` | `{"cpu_max_0":3800000,"cpu_min_0":480000,...}` |
 | `dram.json` | `dram_min_freq` | `{"dram_min_freq":6400000000}` |
 | `io.json` | `io_{read_ahead_kb,scheduler,...}` | `{"io_read_ahead_kb":2048,"io_scheduler":"none",...}` |
-| `ufs.json` | `ufs_wb_on` | `{"ufs_wb_on":1}` |
+| `ufs.json` | `ufs_wb_on`, `ufs_clkgate_enable`, `ufs_clkgate_delay_ms`, `ufs_auto_hibern8`, `ufs_rpm_lvl`, `ufs_spm_lvl` | `{"ufs_wb_on":1,"ufs_clkgate_enable":1,"ufs_clkgate_delay_ms":10,"ufs_auto_hibern8":0,"ufs_rpm_lvl":3,"ufs_spm_lvl":3}` |
 | `thermal.json` | `cpu_thermal_mode`, `gpu_thermal_mode` | `{"cpu_thermal_mode":0,"gpu_thermal_mode":0}` |
 | `profile.json` | `power_mode`, `auto_gaming`, `gaming_apps` | `{"power_mode":1,"auto_gaming":0,"gaming_apps":""}` |
 
@@ -347,13 +348,24 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | `iostats` | Collect `/proc/diskstats` (0 = less overhead) | 1 |
 | `add_random` | Feed disk timings to `/dev/random` | 0 |
 
-### UFS Controller (ufshcd at 0x11270000)
+### UFS Controller (ufshcd at `soc/112b0000.ufshci`)
+
+UFS 4.0 (Samsung, `specification_version` = `0x0400`). All six parameters below are writable via the ufshcd sysfs interface.
+
+> **Important**: Shell redirects (`echo X > /sys/...`) fail on ufshcd sysfs attributes because the kernel blocks the `O_CREAT` flag. Use `printf '%s' X | tee /sys/path` instead.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `wb_on` | Write Booster — SLC cache for burst writes | 1 (ON) |
+| `clkgate_enable` | Clock gating — saves power when UFS link is idle | 1 (ON) |
+| `clkgate_delay_ms` | Idle time (ms) before clock gating activates | 10 |
+| `auto_hibern8` | Auto Hibernate8 idle timer (µs); 0 = disabled | 0 |
+| `rpm_lvl` | Runtime PM power level (0–5; 3 = Sleep/Hibern8) | 3 |
+| `spm_lvl` | System PM power level (0–5; 3 = Sleep/Hibern8) | 3 |
 
-> **Note**: `nr_requests` and `scheduler` switching may be limited on hardware-queue UFS devices. `nr_requests` returns EACCES on this device.
+PM level values: `0`=None, `1`=Active, `2`=Standby, `3`=Sleep/Hibern8, `4`=Power Down, `5`=Max.
+
+> **Note**: `nr_requests` and `clkscale_enable` are not writable on this device — `nr_requests` returns EACCES (hardware queue, no kernel-side queue), and `clkscale_enable` has a different SELinux label (`device_create_file` path). `enable_wb_buf_flush` returns `-EOPNOTSUPP` at the kernel driver level.
 
 ## Control Interfaces
 
@@ -370,7 +382,12 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | DRAM min freq floor | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq` |
 | DRAM max freq ceil  | `echo <hz> \| tee /sys/class/devfreq/mtk-dvfsrc-devfreq/max_freq` |
 | I/O read-ahead | `echo <kb> > /sys/block/sd*/queue/read_ahead_kb` |
-| UFS Write Booster | `echo {0,1} > /sys/devices/platform/11270000.ufshci/wb_on` |
+| UFS Write Booster | `printf '%s' {0,1} \| tee /sys/devices/platform/soc/112b0000.ufshci/wb_on` |
+| UFS Clock Gate | `printf '%s' {0,1} \| tee /sys/devices/platform/soc/112b0000.ufshci/clkgate_enable` |
+| UFS Clock Gate delay | `printf '%s' <ms> \| tee /sys/devices/platform/soc/112b0000.ufshci/clkgate_delay_ms` |
+| UFS Auto Hibernate8 | `printf '%s' <us> \| tee /sys/devices/platform/soc/112b0000.ufshci/auto_hibern8` |
+| UFS RPM level | `printf '%s' {0-5} \| tee /sys/devices/platform/soc/112b0000.ufshci/rpm_lvl` |
+| UFS SPM level | `printf '%s' {0-5} \| tee /sys/devices/platform/soc/112b0000.ufshci/spm_lvl` |
 | CPU thermal trip raise | Write to `/sys/class/thermal/thermal_zone*/trip_point_*_temp` |
 | GPU cdev lock | `echo 0 > /sys/class/thermal/cooling_device*/cur_state` (gpu/mali types) |
 | GPU OPP pin | `echo 0 > /proc/gpufreqv2/fix_target_opp_index` |
@@ -394,7 +411,7 @@ Applied to all UFS block devices (`/sys/block/sd{a,b,c}/queue/`):
 | DRAM type | `/sys/bus/platform/drivers/dramc_drv/dram_type` |
 | Vcore voltage | `/sys/class/regulator/regulator.74/microvolts` |
 | Block queue attrs | `/sys/block/sd{a,b,c}/queue/{scheduler,read_ahead_kb,...}` |
-| UFS controller | `/sys/devices/platform/11270000.ufshci/{wb_on,clkgate_enable,...}` |
+| UFS controller | `/sys/devices/platform/soc/112b0000.ufshci/{wb_on,clkgate_enable,clkgate_delay_ms,auto_hibern8,rpm_lvl,spm_lvl}` |
 | Thermal zones | `/sys/class/thermal/thermal_zone*/type`, `temp`, `trip_point_*_temp` |
 | Cooling devices | `/sys/class/thermal/cooling_device*/type`, `max_state`, `cur_state` |
 | Installed apps | `pm list packages -3` |
