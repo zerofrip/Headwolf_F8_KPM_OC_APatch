@@ -366,7 +366,17 @@
     }
 
     entries.sort((a, b) => a.freq - b.freq);
-    return entries;
+    /* Deduplicate by frequency — can happen when GPU OC patches OPP[0] to
+     * an existing freq (e.g. after deleting the top OPP entry).
+     * Keep the entry with the lower kernelIdx (closer to OPP[0]). */
+    const deduped = [];
+    const seenFreq = new Set();
+    for (const e of entries) {
+      if (seenFreq.has(e.freq)) continue;
+      seenFreq.add(e.freq);
+      deduped.push(e);
+    }
+    return deduped;
   }
 
   function parseGpuPreParsed(raw) {
@@ -388,7 +398,15 @@
       kernelIdx++;
     }
     entries.sort((a, b) => a.freq - b.freq);
-    return entries;
+    /* Deduplicate by frequency (same as parseGpuOppTable) */
+    const deduped = [];
+    const seenFreq = new Set();
+    for (const e of entries) {
+      if (seenFreq.has(e.freq)) continue;
+      seenFreq.add(e.freq);
+      deduped.push(e);
+    }
+    return deduped;
   }
 
   /* ─── Format Helpers ──────────────────────────────────────────────── */
