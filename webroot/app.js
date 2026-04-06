@@ -1846,8 +1846,12 @@
 
   function filterApps(query) {
     state.profile.autoGaming._searchQuery = query;
+    const listEl = document.querySelector('.app-list-container');
+    const scrollTop = listEl ? listEl.scrollTop : 0;
     const el = document.getElementById('gaming-app-selector');
     if (el) el.innerHTML = renderAppSelector();
+    const newListEl = document.querySelector('.app-list-container');
+    if (newListEl) newListEl.scrollTop = scrollTop;
   }
 
   function toggleGamingApp(pkg) {
@@ -1855,22 +1859,32 @@
     const idx = apps.indexOf(pkg);
     if (idx >= 0) apps.splice(idx, 1);
     else apps.push(pkg);
+    /* Save scroll position before re-render */
+    const listEl = document.querySelector('.app-list-container');
+    const scrollTop = listEl ? listEl.scrollTop : 0;
     const el = document.getElementById('gaming-app-selector');
     if (el) el.innerHTML = renderAppSelector();
     const profileEl = document.getElementById('profile-content');
     if (profileEl) profileEl.innerHTML = renderProfileContent();
+    /* Restore scroll position after re-render */
+    const newListEl = document.querySelector('.app-list-container');
+    if (newListEl) newListEl.scrollTop = scrollTop;
   }
 
   function removeGamingApp(pkg) {
     const apps = state.profile.autoGaming.apps;
     const idx = apps.indexOf(pkg);
     if (idx >= 0) apps.splice(idx, 1);
+    const listEl = document.querySelector('.app-list-container');
+    const scrollTop = listEl ? listEl.scrollTop : 0;
     const profileEl = document.getElementById('profile-content');
     if (profileEl) profileEl.innerHTML = renderProfileContent();
     if (state.profile.autoGaming._selectorVisible) {
       const el = document.getElementById('gaming-app-selector');
       if (el) el.innerHTML = renderAppSelector();
     }
+    const newListEl = document.querySelector('.app-list-container');
+    if (newListEl) newListEl.scrollTop = scrollTop;
   }
 
   function toggleAutoGaming(enabled) {
