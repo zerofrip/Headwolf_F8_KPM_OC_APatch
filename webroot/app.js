@@ -1288,24 +1288,14 @@
   }
 
   /* ─── Data Loading ────────────────────────────────────────────────── */
-  async function loadData() {
-    showToast(t('toast.loading'), 'info');
+  /* ─── Section-specific data loaders ─────────────────────────────────── */
 
-    const modCheck = await exec(`lsmod 2>/dev/null | grep kpm_oc`);
-    state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.includes('kpm_oc');
-    updateModuleStatus();
-
-    // --- CPU Data ---
+  async function _loadCpuSection() {
     let cpuMap = new Map();
-
     const cpuRes = await exec(`cat ${KS_PARAMS}opp_table 2>/dev/null`);
     if (cpuRes.stdout.trim().length > 5 && cpuRes.stdout.includes('CPU:')) {
       cpuMap = parseCpuOppTable(cpuRes.stdout);
     }
-
-    /* Fall back to cached file if sysfs data is sparse (MCUPM rewrites CSRAM
-     * after boot, reducing LUT to 1 entry per cluster). The cpu_opp_table file
-     * was saved by service.sh at boot when CSRAM still had the full table. */
     let cpuSparse = false;
     if (cpuMap.size > 0) {
       for (const [, list] of cpuMap) {
@@ -1326,10 +1316,8 @@
       const freqs = freqRes.stdout.trim()
         ? freqRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b)
         : [];
-
       const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null`);
       const minRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_min_freq 2>/dev/null`);
-
       state.cpuClusters.push({
         id: policy,
         entries: cpuMap.get(policy) || [],
@@ -1338,15 +1326,44 @@
         curMin: parseInt(minRes.stdout.trim(), 10) || (freqs.length > 0 ? freqs[0] : 0),
       });
     }
+    state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
 
-    // --- GPU Data ---
+    /* Restore CPU config overrides */
+    const cpuConfRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
+    if (cpuConfRes.stdout.trim()) {
+      try {
+        const cpuConf = JSON.parse(cpuConfRes.stdout.trim());
+        if (cpuConf.cpu_opp_table) {
+          for (const cluster of state.cpuClusters) {
+            const savedEntries = cpuConf.cpu_opp_table[cluster.id];
+            if (!savedEntries || !Array.isArray(savedEntries)) continue;
+            const savedFreqSet = new Set(savedEntries.map(s => s.freq));
+            for (const entry of cluster.entries) {
+              if (!savedFreqSet.has(entry.freq)) entry.removing = true;
+            }
+            for (const saved of savedEntries) {
+              if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
+                const entry = cluster.entries.find(e => e.freq === saved.freq);
+                if (entry) {
+                  entry.origVolt = saved.origVolt;
+                  entry.volt = saved.volt;
+                  entry.modified = true;
+                }
+              }
+            }
+            cluster.entries = cluster.entries.filter(e => !e.removing);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  async function _loadGpuSection() {
     state.gpuEntries = [];
-
     const gpuRes = await exec(`cat /proc/gpufreqv2/gpu_working_opp_table 2>/dev/null`);
     if (gpuRes.stdout.includes('freq:')) {
       state.gpuEntries = parseGpuOppTable(gpuRes.stdout);
     }
-
     if (state.gpuEntries.length === 0) {
       const gpuFileRes = await exec(`cat ${GPU_OPP_FILE} 2>/dev/null`);
       if (gpuFileRes.stdout.trim().length > 5) {
@@ -1357,33 +1374,18 @@
         }
       }
     }
-
-    state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
     state.originalGpu = JSON.parse(JSON.stringify(state.gpuEntries));
 
-    /* --- Restore saved voltage overrides from config ---
-     * After loading live OPP data from kernel/procfs, read the saved config
-     * to restore user-modified voltages. This handles page reloads and GPUEB/
-     * MCUPM rewriting kernel tables back to stock values.
-     */
-
-    /* GPU: restore from gpu_oc.json gpu_opp_table */
+    /* Restore GPU config overrides */
     const gpuConfRes = await exec(`cat ${CONF_GPU_OC} 2>/dev/null`);
     if (gpuConfRes.stdout.trim()) {
       try {
         const gpuConf = JSON.parse(gpuConfRes.stdout.trim());
         if (gpuConf.gpu_opp_table && gpuConf.gpu_opp_table.length > 0) {
-          /* Build set of saved kernelIdx values to detect deletions */
           const savedGpuIdxSet = new Set(gpuConf.gpu_opp_table.map(s => s.kernelIdx));
-
-          /* Mark kernel-reported entries not in saved config as removing */
           for (const entry of state.gpuEntries) {
-            if (!savedGpuIdxSet.has(entry.kernelIdx)) {
-              entry.removing = true;
-            }
+            if (!savedGpuIdxSet.has(entry.kernelIdx)) entry.removing = true;
           }
-
-          /* Restore voltage overrides for saved entries */
           for (const saved of gpuConf.gpu_opp_table) {
             if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
               const entry = state.gpuEntries.find(e => e.kernelIdx === saved.kernelIdx);
@@ -1395,49 +1397,14 @@
               }
             }
           }
+          state.gpuEntries = state.gpuEntries.filter(e => !e.removing);
         }
-      } catch (e) { /* ignore parse errors */ }
+      } catch (e) { /* ignore */ }
     }
+  }
 
-    /* CPU: restore from cpu_oc.json cpu_opp_table */
-    const cpuConfRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
-    if (cpuConfRes.stdout.trim()) {
-      try {
-        const cpuConf = JSON.parse(cpuConfRes.stdout.trim());
-        if (cpuConf.cpu_opp_table) {
-          for (const cluster of state.cpuClusters) {
-            const savedEntries = cpuConf.cpu_opp_table[cluster.id];
-            if (!savedEntries || !Array.isArray(savedEntries)) continue;
-
-            /* Build set of saved freq values to detect deletions */
-            const savedFreqSet = new Set(savedEntries.map(s => s.freq));
-
-            /* Mark kernel-reported entries not in saved config as removing */
-            for (const entry of cluster.entries) {
-              if (!savedFreqSet.has(entry.freq)) {
-                entry.removing = true;
-              }
-            }
-
-            /* Restore voltage overrides for saved entries */
-            for (const saved of savedEntries) {
-              if (saved.origVolt !== undefined && saved.volt !== saved.origVolt) {
-                const entry = cluster.entries.find(e => e.freq === saved.freq);
-                if (entry) {
-                  entry.origVolt = saved.origVolt;
-                  entry.volt = saved.volt;
-                  entry.modified = true;
-                }
-              }
-            }
-          }
-        }
-      } catch (e) { /* ignore parse errors */ }
-    }
-
-    // --- Thermal Data ---
+  async function _loadThermalSection() {
     await loadThermalData();
-    // Read saved thermal modes from config
     const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
     if (thermalCfgRes.stdout) {
       const cpuTM = thermalCfgRes.stdout.match(/"cpu_thermal_mode"\s*:\s*(\d+)/);
@@ -1445,36 +1412,25 @@
       if (cpuTM) state.thermal.cpuMode = parseInt(cpuTM[1], 10) || 0;
       if (gpuTM) state.thermal.gpuMode = parseInt(gpuTM[1], 10) || 0;
     }
+  }
 
-    // Profile / Auto Gaming config
-    const profileCfgRes = await exec(`cat ${CONF_PROFILE} 2>/dev/null`);
-    if (profileCfgRes.stdout) {
-      const pmM = profileCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
-      const agM = profileCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
-      const gaM = profileCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
-      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10);
-      if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
-      if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
-    }
-
-    // --- RAM Data ---
+  async function _loadRamSection() {
     const ramAvailRes = await exec(`cat ${DRAM_DEVFREQ}/available_frequencies 2>/dev/null`);
     const ramFreqs = ramAvailRes.stdout.trim()
       ? ramAvailRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f) && f > 0).sort((a, b) => a - b)
       : [];
-
-    const ramCurRes = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
-    const ramMinRes = await exec(`cat ${DRAM_DEVFREQ}/min_freq 2>/dev/null`);
-    const ramMaxRes = await exec(`cat ${DRAM_DEVFREQ}/max_freq 2>/dev/null`);
-    const ramGovRes = await exec(`cat ${DRAM_DEVFREQ}/governor 2>/dev/null`);
-    const ramRateRes = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
-    const ramTypeRes = await exec(`cat ${DRAM_TYPE_PATH} 2>/dev/null`);
-    const vcoreRes = await exec(`cat ${VCORE_UV_PATH} 2>/dev/null`);
-
+    const [ramCurRes, ramMinRes, ramMaxRes, ramGovRes, ramRateRes, ramTypeRes, vcoreRes] = await Promise.all([
+      exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`),
+      exec(`cat ${DRAM_DEVFREQ}/min_freq 2>/dev/null`),
+      exec(`cat ${DRAM_DEVFREQ}/max_freq 2>/dev/null`),
+      exec(`cat ${DRAM_DEVFREQ}/governor 2>/dev/null`),
+      exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`),
+      exec(`cat ${DRAM_TYPE_PATH} 2>/dev/null`),
+      exec(`cat ${VCORE_UV_PATH} 2>/dev/null`),
+    ]);
     const rateMatch = ramRateRes.stdout.match(/(\d+)/);
     const typeMatch = ramTypeRes.stdout.match(/(\d+)/);
     const ramMinHz = parseInt(ramMinRes.stdout.trim(), 10) || 0;
-
     state.ram = {
       dataRate: rateMatch ? parseInt(rateMatch[1], 10) : 0,
       dramType: typeMatch ? (DRAM_TYPE_MAP[parseInt(typeMatch[1], 10)] || `Type ${typeMatch[1]}`) : '',
@@ -1487,10 +1443,36 @@
       selectedMinFreq: ramMinHz,
     };
     state.originalRamMinFreq = ramMinHz;
+  }
+
+  async function _loadProfileSection() {
+    const profileCfgRes = await exec(`cat ${CONF_PROFILE} 2>/dev/null`);
+    if (profileCfgRes.stdout) {
+      const pmM = profileCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
+      const agM = profileCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
+      const gaM = profileCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
+      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10);
+      if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
+      if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
+    }
+  }
+
+  async function loadData() {
+    showToast(t('toast.loading'), 'info');
+
+    const modCheck = await exec(`lsmod 2>/dev/null | grep kpm_oc`);
+    state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.includes('kpm_oc');
+    updateModuleStatus();
+
+    await _loadCpuSection();
+    await _loadGpuSection();
+    await _loadThermalSection();
+    await _loadProfileSection();
+    await _loadRamSection();
 
     renderAll();
     const cpuCount = state.cpuClusters.reduce((s, c) => s + c.entries.length, 0);
-    showToast(t('toast.loaded', { cpu: cpuCount, gpu: state.gpuEntries.length, ram: ramFreqs.length }), 'success');
+    showToast(t('toast.loaded', { cpu: cpuCount, gpu: state.gpuEntries.length, ram: state.ram.availableFreqs.length }), 'success');
   }
 
   /* ─── Storage Data Loading ────────────────────────────────────────── */
@@ -2249,7 +2231,9 @@
   }
 
   /* ─── Apply All Changes ───────────────────────────────────────────── */
-  async function applyAll() {
+  /* ─── Section-specific apply functions ──────────────────────────────── */
+
+  async function applyCpu() {
     showToast(t('toast.applying'), 'info');
     let anyOcApplied = false;
 
@@ -2273,13 +2257,6 @@
         ? Math.max(...origEntries.map(e => e.freq))
         : 0;
 
-      /* Apply CPU OC when:
-       * - The max entry is a newly added OPP (isNew), OR
-       * - The max entry's freq or voltage was modified, OR
-       * - The max freq differs from stock origMax (top deleted or OC added)
-       * - Any entry was removed (need to update OC target to new top)
-       * The kernel module patches CSRAM LUT[0] + cpufreq policy max.
-       */
       const anyRemoving = cluster.entries.some(e => e.removing);
       if (maxEntry && (maxEntry.isNew || maxEntry.modified || maxEntry.freq !== origMax || anyRemoving)) {
         await execChecked(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`, `CPU ${key} freq`);
@@ -2311,11 +2288,6 @@
       await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply');
       anyOcApplied = true;
 
-      /* After OC apply, the kernel module patches LUT + lifts freq_qos.
-       * Re-read scaling_available_frequencies (now includes OC freq) and
-       * scaling_max_freq (now lifted to OC target) for each cluster.
-       * Then set scaling_max_freq to the OC target and update the UI.
-       */
       await new Promise(r => setTimeout(r, 300));
       for (const cluster of state.cpuClusters) {
         const freqRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_available_frequencies 2>/dev/null`);
@@ -2323,8 +2295,6 @@
           cluster.freqs = freqRes.stdout.trim().split(/\s+/)
             .map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b);
         }
-
-        /* Set scaling_max_freq to the OC target (the max entry we just applied) */
         const active = cluster.entries.filter(e => !e.removing);
         const maxEntry = active.length > 0
           ? active.reduce((m, e) => e.freq > m.freq ? e : m)
@@ -2333,23 +2303,14 @@
           const applied = await ensureCpuMax(cluster.id, maxEntry.freq);
           cluster.curMax = applied > 0 ? applied : maxEntry.freq;
         }
-
-        /* Re-read actual value to confirm */
         const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq 2>/dev/null`);
         const actualMax = parseInt(maxRes.stdout.trim(), 10);
         if (actualMax > 0) cluster.curMax = actualMax;
       }
-
-      /* Keep selects/chips in sync with post-apply OC values. */
       renderAll();
     }
 
-    /* CPU: per-LUT voltage overrides via kernel module (CSRAM direct write).
-     * Format: "cluster:lut_idx:volt_uv cluster:lut_idx:volt_uv ..."
-     * Cluster mapping: policy0→0(L), policy4→1(B), policy7→2(P)
-     * NOTE: CSRAM LUT is stored in DESCENDING freq order (index 0 = highest),
-     * but WebUI entries are sorted ASCENDING. Convert index accordingly.
-     */
+    /* CPU: per-LUT voltage overrides */
     {
       const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
       const voltOverrides = [];
@@ -2362,10 +2323,7 @@
         for (let i = 0; i < cluster.entries.length; i++) {
           const entry = cluster.entries[i];
           if (entry.removing) continue;
-          if ((entry.modified || entry.isNew) &&
-              entry.volt !== entry.origVolt) {
-            /* Reverse index: WebUI ascending [0]=lowest → CSRAM descending [N-1]
-             * Use activeIdx (skips removing entries) for correct mapping. */
+          if ((entry.modified || entry.isNew) && entry.volt !== entry.origVolt) {
             const lutIdx = entryCount - 1 - activeIdx;
             voltOverrides.push(`${ci}:${lutIdx}:${entry.volt}`);
           }
@@ -2373,13 +2331,37 @@
         }
       }
       if (voltOverrides.length > 0) {
-        const overrideStr = voltOverrides.join(' ');
         await execChecked(
-          `echo '${overrideStr}' > ${KS_PARAMS}cpu_volt_override`,
+          `echo '${voltOverrides.join(' ')}' > ${KS_PARAMS}cpu_volt_override`,
           'cpu_volt_override');
         anyOcApplied = true;
       }
     }
+
+    await applyThermal();
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveCpuConfig();
+    await saveThermalConfig();
+
+    /* Reload CPU section to reflect applied changes */
+    await _loadCpuSection();
+    await _loadThermalSection();
+    renderAll();
+
+    if (anyOcApplied) {
+      const cpuRes     = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
+      const cpuVoltRes = await exec(`cat ${KS_PARAMS}cpu_volt_ov_result 2>/dev/null`);
+      const details = [cpuRes.stdout.trim(), cpuVoltRes.stdout.trim()]
+        .filter(s => s && s !== 'NOOP' && s !== '(null)').join(' | ');
+      showToast(t('toast.applied_saved', { details }), 'success');
+    } else {
+      showToast(t('toast.saved'), 'success');
+    }
+  }
+
+  async function applyGpu() {
+    showToast(t('toast.applying'), 'info');
+    let anyOcApplied = false;
 
     /* --- GPU OC: detect top entry above stock max, apply via kpm_oc --- */
     const activeGpu = state.gpuEntries.filter(e => !e.removing);
@@ -2392,8 +2374,7 @@
 
     const anyGpuRemoving = state.gpuEntries.some(e => e.removing);
     if (gpuMax && (gpuMax.isNew || gpuMax.modified || gpuMax.freq !== origGpuMax || anyGpuRemoving)) {
-      /* gpu_target_* expects OPP-table units (gpufreqv2 value, not µV) */
-      const voltStep = Math.round(gpuMax.volt / 10);
+      const voltStep  = Math.round(gpuMax.volt / 10);
       const vsramStep = gpuMax.vsram > 0 ? Math.round(gpuMax.vsram / 10) : voltStep;
       await execChecked(`echo ${gpuMax.freq} > ${KS_PARAMS}gpu_target_freq`, 'gpu freq');
       await execChecked(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`, 'gpu volt');
@@ -2403,46 +2384,338 @@
       anyOcApplied = true;
     }
 
-    /* GPU: per-OPP voltage overrides via kernel module (direct memory patch).
-     * Bypasses driver fix_custom_freq_volt validation (DVFSState, volt clamp).
-     * Format: "opp_idx:volt:vsram opp_idx:volt:vsram ..."
-     * NOTE: Kernel OPP table is DESCENDING (idx 0 = highest freq), but WebUI
-     * entries are sorted ASCENDING. Use entry.kernelIdx for correct mapping.
-     */
+    /* GPU: per-OPP voltage overrides */
     {
       const voltOverrides = [];
-      for (let i = 0; i < state.gpuEntries.length; i++) {
-        const entry = state.gpuEntries[i];
+      for (const entry of state.gpuEntries) {
         if (!entry.removing && !entry.isNew && entry.modified &&
             entry.volt !== entry.origVolt &&
             entry.kernelIdx !== undefined) {
-          const voltStep = Math.round(entry.volt / 10);
+          const voltStep  = Math.round(entry.volt  / 10);
           const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
           voltOverrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
         }
       }
       if (voltOverrides.length > 0) {
-        const overrideStr = voltOverrides.join(' ');
         await execChecked(
-          `echo '${overrideStr}' > ${KS_PARAMS}gpu_volt_override`,
+          `echo '${voltOverrides.join(' ')}' > ${KS_PARAMS}gpu_volt_override`,
           'gpu_volt_override');
         anyOcApplied = true;
       }
     }
 
+    await applyThermal();
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveGpuConfig();
+    await saveThermalConfig();
+
+    /* Reload GPU section to reflect applied changes */
+    await _loadGpuSection();
+    await _loadThermalSection();
+    renderAll();
+
+    if (anyOcApplied) {
+      const gpuRes     = await exec(`cat ${KS_PARAMS}gpu_oc_result 2>/dev/null`);
+      const gpuVoltRes = await exec(`cat ${KS_PARAMS}gpu_volt_ov_result 2>/dev/null`);
+      const details = [gpuRes.stdout.trim(), gpuVoltRes.stdout.trim()]
+        .filter(s => s && s !== 'NOOP' && s !== '(null)').join(' | ');
+      showToast(t('toast.applied_saved', { details }), 'success');
+    } else {
+      showToast(t('toast.saved'), 'success');
+    }
+  }
+
+  async function applyRam() {
+    showToast(t('toast.applying'), 'info');
+
     /* --- RAM: set DRAM min_freq floor via devfreq --- */
     const ramMinTarget = state.ram.selectedMinFreq;
     if (ramMinTarget > 0 && ramMinTarget !== state.originalRamMinFreq) {
-      /* Use tee because shell redirect can fail in some su contexts */
       const ramRes = await exec(`echo ${ramMinTarget} | tee ${DRAM_DEVFREQ}/min_freq`);
       if (ramRes.errno === 0) {
         state.ram.minFreq = ramMinTarget;
         state.originalRamMinFreq = ramMinTarget;
-        /* Re-read cur_freq and vcore after change */
-        const newCur = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
+        const newCur   = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
         const newVcore = await exec(`cat ${VCORE_UV_PATH} 2>/dev/null`);
-        const newRate = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
-        state.ram.curFreq = parseInt(newCur.stdout.trim(), 10) || state.ram.curFreq;
+        const newRate  = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
+        state.ram.curFreq = parseInt(newCur.stdout.trim(), 10)   || state.ram.curFreq;
+        state.ram.vcoreUv = parseInt(newVcore.stdout.trim(), 10) || state.ram.vcoreUv;
+        const rateMatch = newRate.stdout.match(/(\d+)/);
+        if (rateMatch) state.ram.dataRate = parseInt(rateMatch[1], 10);
+        renderAll();
+      } else {
+        showToast(t('ram.dram_min_fail', { err: ramRes.stderr }), 'error');
+        return;
+      }
+    }
+
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveRamConfig();
+
+    /* Reload RAM section to reflect applied changes */
+    await _loadRamSection();
+    renderAll();
+
+    showToast(t('toast.saved'), 'success');
+  }
+
+  async function applyStorage() {
+    showToast(t('toast.applying'), 'info');
+
+    /* --- Storage: apply all block queue + UFS controller settings --- */
+    const sto = state.storage;
+    if (sto.devices.length > 0) {
+      const results = [];
+
+      for (const dev of sto.devices) {
+        const base = `/sys/block/${dev.name}/queue`;
+
+        if (sto.readAheadKb > 0 && dev.readAheadKb !== sto.readAheadKb) {
+          const r = await exec(`echo ${sto.readAheadKb} > ${base}/read_ahead_kb 2>&1; echo $?`);
+          if (r.stdout.trim().endsWith('0') || r.errno === 0) {
+            dev.readAheadKb = sto.readAheadKb;
+          }
+        }
+
+        if (sto.scheduler && dev.scheduler !== sto.scheduler) {
+          const r = await exec(`echo ${sto.scheduler} > ${base}/scheduler 2>&1`);
+          if (r.errno === 0 && !r.stderr.trim()) {
+            dev.scheduler = sto.scheduler;
+          } else {
+            results.push(`sched:${r.stderr.trim().substring(0, 40)}`);
+          }
+        }
+
+        if (dev.nomerges !== sto.nomerges) {
+          await exec(`echo ${sto.nomerges} > ${base}/nomerges 2>/dev/null`);
+          dev.nomerges = sto.nomerges;
+        }
+
+        if (dev.rqAffinity !== sto.rqAffinity) {
+          await exec(`echo ${sto.rqAffinity} > ${base}/rq_affinity 2>/dev/null`);
+          dev.rqAffinity = sto.rqAffinity;
+        }
+
+        if (dev.iostats !== sto.iostats) {
+          await exec(`echo ${sto.iostats} > ${base}/iostats 2>/dev/null`);
+          dev.iostats = sto.iostats;
+        }
+
+        if (dev.addRandom !== sto.addRandom) {
+          await exec(`echo ${sto.addRandom} > ${base}/add_random 2>/dev/null`);
+          dev.addRandom = sto.addRandom;
+        }
+      }
+
+      if (sto.ufsHciPath && sto.wbOn >= 0) {
+        await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
+      }
+
+      await exec(`mkdir -p ${CONF_DIR}`);
+      await saveStorageConfig();
+
+      /* Reload Storage section to reflect applied changes */
+      await loadStorageData();
+      renderAll();
+
+      showToast(t('storage.toast', { ra: sto.readAheadKb, sched: sto.scheduler, rqa: sto.rqAffinity, nom: sto.nomerges }) + (sto.wbOn >= 0 ? ' WB=' + (sto.wbOn ? 'ON' : 'OFF') : ''), 'success');
+    } else {
+      showToast(t('toast.saved'), 'success');
+    }
+  }
+
+  async function applyProfile() {
+    showToast(t('toast.applying'), 'info');
+
+    /* Power mode: enforce Battery Save scaling limits */
+    if (state.profile.powerMode === 0) {
+      const bs = POWER_PRESETS[0];
+      if (bs.cpuMax) {
+        for (const cluster of state.cpuClusters) {
+          if (bs.cpuMax[cluster.id] !== undefined) {
+            await exec('echo ' + bs.cpuMax[cluster.id] + ' > /sys/devices/system/cpu/cpufreq/policy' + cluster.id + '/scaling_max_freq 2>/dev/null');
+            cluster.curMax = bs.cpuMax[cluster.id];
+          }
+        }
+      }
+    }
+
+    /* Gaming monitor + daemon */
+    if (state.profile.autoGaming.enabled && state.profile.autoGaming.apps.length > 0) {
+      await startGamingMonitor();
+      await restartGamingDaemon();
+    } else {
+      stopGamingMonitor();
+      await stopGamingDaemon();
+    }
+
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveProfileConfig();
+
+    /* Reload Profile section to reflect applied changes */
+    await _loadProfileSection();
+    renderAll();
+
+    showToast(t('toast.saved'), 'success');
+  }
+
+  /* Legacy full-apply (applies all sections at once) */
+  async function applyAll() {
+    showToast(t('toast.applying'), 'info');
+    let anyOcApplied = false;
+
+    /* --- CPU OC --- */
+    const clusterParamMap = { 0: 'l', 4: 'b', 7: 'p' };
+    let cpuOcNeeded = false;
+    let cpuReliftNeeded = false;
+
+    for (const cluster of state.cpuClusters) {
+      const key = clusterParamMap[cluster.id];
+      if (!key) continue;
+
+      const active = cluster.entries.filter(e => !e.removing);
+      const maxEntry = active.length > 0
+        ? active.reduce((m, e) => e.freq > m.freq ? e : m)
+        : null;
+
+      const origCluster = state.originalCpu.find(c => c.id === cluster.id);
+      const origEntries = origCluster ? origCluster.entries : [];
+      const origMax = origEntries.length > 0
+        ? Math.max(...origEntries.map(e => e.freq))
+        : 0;
+
+      const anyRemoving = cluster.entries.some(e => e.removing);
+      if (maxEntry && (maxEntry.isNew || maxEntry.modified || maxEntry.freq !== origMax || anyRemoving)) {
+        await execChecked(`echo ${maxEntry.freq} > ${KS_PARAMS}cpu_oc_${key}_freq`, `CPU ${key} freq`);
+        await execChecked(`echo ${maxEntry.volt} > ${KS_PARAMS}cpu_oc_${key}_volt`, `CPU ${key} volt`);
+        cpuOcNeeded = true;
+      }
+
+      const maxSel = document.getElementById(`cpu-max-freq-${cluster.id}`);
+      const minSel = document.getElementById(`cpu-min-freq-${cluster.id}`);
+      if (maxSel) {
+        const v = parseInt(maxSel.value, 10);
+        if (!isNaN(v) && v > 0) {
+          const applied = await ensureCpuMax(cluster.id, v);
+          cluster.curMax = applied > 0 ? applied : v;
+          if (v > origMax) cpuReliftNeeded = true;
+        }
+      }
+      if (minSel) {
+        const v = parseInt(minSel.value, 10);
+        if (!isNaN(v) && v > 0) {
+          await execChecked(`echo ${v} > /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_min_freq`, `scaling_min p${cluster.id}`);
+          cluster.curMin = v;
+        }
+      }
+    }
+
+    if (cpuOcNeeded || cpuReliftNeeded) {
+      await execChecked(`echo 1 > ${KS_PARAMS}cpu_oc_apply`, 'cpu_oc_apply');
+      anyOcApplied = true;
+
+      await new Promise(r => setTimeout(r, 300));
+      for (const cluster of state.cpuClusters) {
+        const freqRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_available_frequencies 2>/dev/null`);
+        if (freqRes.stdout.trim()) {
+          cluster.freqs = freqRes.stdout.trim().split(/\s+/)
+            .map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b);
+        }
+        const active = cluster.entries.filter(e => !e.removing);
+        const maxEntry = active.length > 0
+          ? active.reduce((m, e) => e.freq > m.freq ? e : m)
+          : null;
+        if (maxEntry && maxEntry.freq > 0) {
+          const applied = await ensureCpuMax(cluster.id, maxEntry.freq);
+          cluster.curMax = applied > 0 ? applied : maxEntry.freq;
+        }
+        const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${cluster.id}/scaling_max_freq 2>/dev/null`);
+        const actualMax = parseInt(maxRes.stdout.trim(), 10);
+        if (actualMax > 0) cluster.curMax = actualMax;
+      }
+      renderAll();
+    }
+
+    /* CPU: per-LUT voltage overrides */
+    {
+      const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
+      const voltOverrides = [];
+      for (const cluster of state.cpuClusters) {
+        const ci = clusterIdxMap[cluster.id];
+        if (ci === undefined) continue;
+        const activeEntries = cluster.entries.filter(e => !e.removing);
+        const entryCount = activeEntries.length;
+        let activeIdx = 0;
+        for (let i = 0; i < cluster.entries.length; i++) {
+          const entry = cluster.entries[i];
+          if (entry.removing) continue;
+          if ((entry.modified || entry.isNew) && entry.volt !== entry.origVolt) {
+            const lutIdx = entryCount - 1 - activeIdx;
+            voltOverrides.push(`${ci}:${lutIdx}:${entry.volt}`);
+          }
+          activeIdx++;
+        }
+      }
+      if (voltOverrides.length > 0) {
+        await execChecked(
+          `echo '${voltOverrides.join(' ')}' > ${KS_PARAMS}cpu_volt_override`,
+          'cpu_volt_override');
+        anyOcApplied = true;
+      }
+    }
+
+    /* --- GPU OC --- */
+    const activeGpu = state.gpuEntries.filter(e => !e.removing);
+    const gpuMax = activeGpu.length > 0
+      ? activeGpu.reduce((m, e) => e.freq > m.freq ? e : m)
+      : null;
+    const origGpuMax = state.originalGpu.length > 0
+      ? Math.max(...state.originalGpu.map(e => e.freq))
+      : 0;
+
+    const anyGpuRemoving = state.gpuEntries.some(e => e.removing);
+    if (gpuMax && (gpuMax.isNew || gpuMax.modified || gpuMax.freq !== origGpuMax || anyGpuRemoving)) {
+      const voltStep  = Math.round(gpuMax.volt / 10);
+      const vsramStep = gpuMax.vsram > 0 ? Math.round(gpuMax.vsram / 10) : voltStep;
+      await execChecked(`echo ${gpuMax.freq} > ${KS_PARAMS}gpu_target_freq`, 'gpu freq');
+      await execChecked(`echo ${voltStep} > ${KS_PARAMS}gpu_target_volt`, 'gpu volt');
+      await execChecked(`echo ${vsramStep} > ${KS_PARAMS}gpu_target_vsram`, 'gpu vsram');
+      await execChecked(`echo 1 > ${KS_PARAMS}gpu_oc_apply`, 'gpu_oc_apply');
+      await ensureGpuMax(gpuMax.freq);
+      anyOcApplied = true;
+    }
+
+    /* GPU: per-OPP voltage overrides */
+    {
+      const voltOverrides = [];
+      for (const entry of state.gpuEntries) {
+        if (!entry.removing && !entry.isNew && entry.modified &&
+            entry.volt !== entry.origVolt &&
+            entry.kernelIdx !== undefined) {
+          const voltStep  = Math.round(entry.volt  / 10);
+          const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
+          voltOverrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
+        }
+      }
+      if (voltOverrides.length > 0) {
+        await execChecked(
+          `echo '${voltOverrides.join(' ')}' > ${KS_PARAMS}gpu_volt_override`,
+          'gpu_volt_override');
+        anyOcApplied = true;
+      }
+    }
+
+    /* --- RAM --- */
+    const ramMinTarget = state.ram.selectedMinFreq;
+    if (ramMinTarget > 0 && ramMinTarget !== state.originalRamMinFreq) {
+      const ramRes = await exec(`echo ${ramMinTarget} | tee ${DRAM_DEVFREQ}/min_freq`);
+      if (ramRes.errno === 0) {
+        state.ram.minFreq = ramMinTarget;
+        state.originalRamMinFreq = ramMinTarget;
+        const newCur   = await exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`);
+        const newVcore = await exec(`cat ${VCORE_UV_PATH} 2>/dev/null`);
+        const newRate  = await exec(`cat ${DRAM_DATA_RATE} 2>/dev/null`);
+        state.ram.curFreq = parseInt(newCur.stdout.trim(), 10)   || state.ram.curFreq;
         state.ram.vcoreUv = parseInt(newVcore.stdout.trim(), 10) || state.ram.vcoreUv;
         const rateMatch = newRate.stdout.match(/(\d+)/);
         if (rateMatch) state.ram.dataRate = parseInt(rateMatch[1], 10);
@@ -2457,7 +2730,7 @@
     await applyThermal();
     await saveConfig();
 
-    /* --- Storage: apply all block queue + UFS controller settings --- */
+    /* --- Storage --- */
     const sto = state.storage;
     if (sto.devices.length > 0) {
       const results = [];
@@ -2465,7 +2738,6 @@
       for (const dev of sto.devices) {
         const base = `/sys/block/${dev.name}/queue`;
 
-        /* Read-Ahead */
         if (sto.readAheadKb > 0 && dev.readAheadKb !== sto.readAheadKb) {
           const r = await exec(`echo ${sto.readAheadKb} > ${base}/read_ahead_kb 2>&1; echo $?`);
           if (r.stdout.trim().endsWith('0') || r.errno === 0) {
@@ -2473,7 +2745,6 @@
           }
         }
 
-        /* Scheduler — write only if user selected a different one */
         if (sto.scheduler && dev.scheduler !== sto.scheduler) {
           const r = await exec(`echo ${sto.scheduler} > ${base}/scheduler 2>&1`);
           if (r.errno === 0 && !r.stderr.trim()) {
@@ -2483,32 +2754,27 @@
           }
         }
 
-        /* nomerges */
         if (dev.nomerges !== sto.nomerges) {
           await exec(`echo ${sto.nomerges} > ${base}/nomerges 2>/dev/null`);
           dev.nomerges = sto.nomerges;
         }
 
-        /* rq_affinity */
         if (dev.rqAffinity !== sto.rqAffinity) {
           await exec(`echo ${sto.rqAffinity} > ${base}/rq_affinity 2>/dev/null`);
           dev.rqAffinity = sto.rqAffinity;
         }
 
-        /* iostats */
         if (dev.iostats !== sto.iostats) {
           await exec(`echo ${sto.iostats} > ${base}/iostats 2>/dev/null`);
           dev.iostats = sto.iostats;
         }
 
-        /* add_random */
         if (dev.addRandom !== sto.addRandom) {
           await exec(`echo ${sto.addRandom} > ${base}/add_random 2>/dev/null`);
           dev.addRandom = sto.addRandom;
         }
       }
 
-      /* UFS Write Booster */
       if (sto.ufsHciPath && sto.wbOn >= 0) {
         await exec(`echo ${sto.wbOn} > ${sto.ufsHciPath}/wb_on 2>/dev/null`);
       }
@@ -2541,8 +2807,8 @@
 
     /* Read back results from kernel module for user feedback */
     if (anyOcApplied) {
-      const cpuRes = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
-      const gpuRes = await exec(`cat ${KS_PARAMS}gpu_oc_result 2>/dev/null`);
+      const cpuRes     = await exec(`cat ${KS_PARAMS}cpu_oc_result 2>/dev/null`);
+      const gpuRes     = await exec(`cat ${KS_PARAMS}gpu_oc_result 2>/dev/null`);
       const cpuVoltRes = await exec(`cat ${KS_PARAMS}cpu_volt_ov_result 2>/dev/null`);
       const gpuVoltRes = await exec(`cat ${KS_PARAMS}gpu_volt_ov_result 2>/dev/null`);
       const details = [
@@ -2557,11 +2823,14 @@
     }
   }
 
-  /* ─── Save Config (per-section split files) ──────────────────────────── */
-  async function saveConfig() {
-    /* Derive OC targets from state (active top entries) instead of sysfs,
-     * so deletions and modifications are always reflected in saved config. */
+  /* ─── Save Config — per-section helpers ─────────────────────────────── */
+
+  /* shared escaper */
+  const _esc = (s) => s.replace(/'/g, "'\\''");
+
+  async function saveCpuConfig() {
     const clusterParamKeys = { 0: 'l', 4: 'b', 7: 'p' };
+    const clusterIdxMap   = { 0: 0,   4: 1,   7: 2   };
     const clusterOc = {};
     for (const cluster of state.cpuClusters) {
       const key = clusterParamKeys[cluster.id];
@@ -2573,144 +2842,124 @@
       clusterOc[key] = top ? { freq: top.freq, volt: top.volt } : { freq: 0, volt: 0 };
     }
 
-    const activeGpuForSave = state.gpuEntries.filter(e => !e.removing);
-    const gpuTopForSave = activeGpuForSave.length > 0
-      ? activeGpuForSave.reduce((m, e) => e.freq > m.freq ? e : m)
-      : null;
-    const gpuOcFreq = gpuTopForSave ? gpuTopForSave.freq : 0;
-    const gpuOcVolt = gpuTopForSave ? Math.round(gpuTopForSave.volt / 10) : 0;
-    const gpuOcVsram = gpuTopForSave
-      ? (gpuTopForSave.vsram > 0 ? Math.round(gpuTopForSave.vsram / 10) : gpuOcVolt)
-      : 0;
-
-    await exec(`mkdir -p ${CONF_DIR}`);
-
-    const esc = (s) => s.replace(/'/g, "'\\''");
-
-    /* CPU OC — save OC target + full OPP table with modified voltages.
-     * Cluster entries are stored in ASCENDING freq order (WebUI convention).
-     * service.sh reads cpu_oc_*_freq/volt for the top OC target, and
-     * cpu_opp_overrides[] for per-LUT voltage overrides (cluster:lutIdx:volt).
-     */
-    {
-      const clusterIdxMap = { 0: 0, 4: 1, 7: 2 };
-      const cpuOcObj = {
-        cpu_oc_l_freq:  clusterOc.l ? clusterOc.l.freq : 0,
-        cpu_oc_l_volt:  clusterOc.l ? clusterOc.l.volt : 0,
-        cpu_oc_b_freq:  clusterOc.b ? clusterOc.b.freq : 0,
-        cpu_oc_b_volt:  clusterOc.b ? clusterOc.b.volt : 0,
-        cpu_oc_p_freq:  clusterOc.p ? clusterOc.p.freq : 0,
-        cpu_oc_p_volt:  clusterOc.p ? clusterOc.p.volt : 0,
-        cpu_opp_overrides: [],
-        cpu_opp_table: {},
-      };
-
-      for (const cluster of state.cpuClusters) {
-        const ci = clusterIdxMap[cluster.id];
-        if (ci === undefined) continue;
-        const activeEntries = cluster.entries.filter(e => !e.removing);
-        const entryCount = activeEntries.length;
-
-        /* Save full OPP table per cluster (ascending freq) */
-        cpuOcObj.cpu_opp_table[cluster.id] = activeEntries.map(e => ({
-          freq: e.freq, volt: e.volt, origVolt: e.origVolt,
-        }));
-
-        /* Save per-LUT voltage overrides for entries with modified voltage */
-        for (let ai = 0; ai < activeEntries.length; ai++) {
-          const entry = activeEntries[ai];
-          if ((entry.modified || entry.isNew) && entry.volt !== entry.origVolt) {
-            const lutIdx = entryCount - 1 - ai;
-            cpuOcObj.cpu_opp_overrides.push(`${ci}:${lutIdx}:${entry.volt}`);
-          }
-        }
-      }
-
-      const cpuOcJson = JSON.stringify(cpuOcObj);
-      await exec(`printf '%s' '${esc(cpuOcJson)}' > ${CONF_CPU_OC}`);
-    }
-
-    /* GPU OC — save OC target + full OPP table with modified voltages.
-     * GPU entries use kernelIdx (descending: 0=highest freq in kernel table).
-     * service.sh reads gpu_oc_freq/volt/vsram for the top OC target, and
-     * gpu_opp_overrides[] for per-OPP voltage overrides (kernelIdx:volt:vsram).
-     */
-    {
-      const gpuOcObj = {
-        gpu_oc_freq:    gpuOcFreq,
-        gpu_oc_volt:    gpuOcVolt,
-        gpu_oc_vsram:   gpuOcVsram,
-        gpu_opp_overrides: [],
-        gpu_opp_table: [],
-      };
-
-      const activeGpu = state.gpuEntries.filter(e => !e.removing);
-
-      /* Save full GPU OPP table (ascending freq — WebUI convention) */
-      gpuOcObj.gpu_opp_table = activeGpu.map(e => ({
-        freq: e.freq,
-        volt: e.volt,
-        origVolt: e.origVolt,
-        vsram: e.vsram || 0,
-        kernelIdx: e.kernelIdx,
+    /* CPU OC — save OC target + full OPP table with modified voltages. */
+    const cpuOcObj = {
+      cpu_oc_l_freq:  clusterOc.l ? clusterOc.l.freq : 0,
+      cpu_oc_l_volt:  clusterOc.l ? clusterOc.l.volt : 0,
+      cpu_oc_b_freq:  clusterOc.b ? clusterOc.b.freq : 0,
+      cpu_oc_b_volt:  clusterOc.b ? clusterOc.b.volt : 0,
+      cpu_oc_p_freq:  clusterOc.p ? clusterOc.p.freq : 0,
+      cpu_oc_p_volt:  clusterOc.p ? clusterOc.p.volt : 0,
+      cpu_opp_overrides: [],
+      cpu_opp_table: {},
+    };
+    for (const cluster of state.cpuClusters) {
+      const ci = clusterIdxMap[cluster.id];
+      if (ci === undefined) continue;
+      const activeEntries = cluster.entries.filter(e => !e.removing);
+      const entryCount = activeEntries.length;
+      cpuOcObj.cpu_opp_table[cluster.id] = activeEntries.map(e => ({
+        freq: e.freq, volt: e.volt, origVolt: e.origVolt,
       }));
-
-      /* Save per-OPP voltage overrides for modified entries */
-      for (const entry of activeGpu) {
-        if (!entry.isNew && entry.modified &&
-            entry.volt !== entry.origVolt &&
-            entry.kernelIdx !== undefined) {
-          const voltStep = Math.round(entry.volt / 10);
-          const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
-          gpuOcObj.gpu_opp_overrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
+      for (let ai = 0; ai < activeEntries.length; ai++) {
+        const entry = activeEntries[ai];
+        if ((entry.modified || entry.isNew) && entry.volt !== entry.origVolt) {
+          const lutIdx = entryCount - 1 - ai;
+          cpuOcObj.cpu_opp_overrides.push(`${ci}:${lutIdx}:${entry.volt}`);
         }
       }
-
-      const gpuOcJson = JSON.stringify(gpuOcObj);
-      await exec(`printf '%s' '${esc(gpuOcJson)}' > ${CONF_GPU_OC}`);
     }
+    await exec(`printf '%s' '${_esc(JSON.stringify(cpuOcObj))}' > ${CONF_CPU_OC}`);
+
     /* CPU Scaling */
     const scalingObj = {};
     for (const cluster of state.cpuClusters) {
       scalingObj[`cpu_max_${cluster.id}`] = parseInt(cluster.curMax, 10) || 0;
       scalingObj[`cpu_min_${cluster.id}`] = parseInt(cluster.curMin, 10) || 0;
     }
-    await exec(`printf '%s' '${esc(JSON.stringify(scalingObj))}' > ${CONF_CPU_SCALING}`);
+    await exec(`printf '%s' '${_esc(JSON.stringify(scalingObj))}' > ${CONF_CPU_SCALING}`);
+  }
 
-    /* DRAM */
+  async function saveGpuConfig() {
+    const activeGpu = state.gpuEntries.filter(e => !e.removing);
+    const gpuTop = activeGpu.length > 0
+      ? activeGpu.reduce((m, e) => e.freq > m.freq ? e : m)
+      : null;
+    const gpuOcFreq  = gpuTop ? gpuTop.freq : 0;
+    const gpuOcVolt  = gpuTop ? Math.round(gpuTop.volt / 10) : 0;
+    const gpuOcVsram = gpuTop
+      ? (gpuTop.vsram > 0 ? Math.round(gpuTop.vsram / 10) : gpuOcVolt)
+      : 0;
+
+    const gpuOcObj = {
+      gpu_oc_freq:  gpuOcFreq,
+      gpu_oc_volt:  gpuOcVolt,
+      gpu_oc_vsram: gpuOcVsram,
+      gpu_opp_overrides: [],
+      gpu_opp_table: activeGpu.map(e => ({
+        freq: e.freq, volt: e.volt, origVolt: e.origVolt,
+        vsram: e.vsram || 0, kernelIdx: e.kernelIdx,
+      })),
+    };
+    for (const entry of activeGpu) {
+      if (!entry.isNew && entry.modified &&
+          entry.volt !== entry.origVolt &&
+          entry.kernelIdx !== undefined) {
+        const voltStep  = Math.round(entry.volt  / 10);
+        const vsramStep = entry.vsram > 0 ? Math.round(entry.vsram / 10) : voltStep;
+        gpuOcObj.gpu_opp_overrides.push(`${entry.kernelIdx}:${voltStep}:${vsramStep}`);
+      }
+    }
+    await exec(`printf '%s' '${_esc(JSON.stringify(gpuOcObj))}' > ${CONF_GPU_OC}`);
+  }
+
+  async function saveRamConfig() {
     const dramJson = JSON.stringify({ dram_min_freq: state.ram.selectedMinFreq || 0 });
-    await exec(`printf '%s' '${esc(dramJson)}' > ${CONF_DRAM}`);
+    await exec(`printf '%s' '${_esc(dramJson)}' > ${CONF_DRAM}`);
+  }
 
-    /* I/O */
+  async function saveStorageConfig() {
     const ioJson = JSON.stringify({
       io_read_ahead_kb: state.storage.readAheadKb || 2048,
-      io_scheduler: state.storage.scheduler || 'none',
-      io_nomerges: state.storage.nomerges || 0,
-      io_rq_affinity: state.storage.rqAffinity ?? 2,
-      io_iostats: state.storage.iostats ?? 1,
-      io_add_random: state.storage.addRandom || 0,
+      io_scheduler:     state.storage.scheduler   || 'none',
+      io_nomerges:      state.storage.nomerges    || 0,
+      io_rq_affinity:   state.storage.rqAffinity  ?? 2,
+      io_iostats:       state.storage.iostats      ?? 1,
+      io_add_random:    state.storage.addRandom    || 0,
     });
-    await exec(`printf '%s' '${esc(ioJson)}' > ${CONF_IO}`);
+    await exec(`printf '%s' '${_esc(ioJson)}' > ${CONF_IO}`);
 
-    /* UFS */
     const ufsObj = {};
     if (state.storage.wbOn >= 0) ufsObj.ufs_wb_on = state.storage.wbOn;
-    await exec(`printf '%s' '${esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
+    await exec(`printf '%s' '${_esc(JSON.stringify(ufsObj))}' > ${CONF_UFS}`);
+  }
 
-    /* Thermal */
+  async function saveThermalConfig() {
     const thermalJson = JSON.stringify({
       cpu_thermal_mode: state.thermal.cpuMode,
       gpu_thermal_mode: state.thermal.gpuMode,
     });
-    await exec(`printf '%s' '${esc(thermalJson)}' > ${CONF_THERMAL}`);
+    await exec(`printf '%s' '${_esc(thermalJson)}' > ${CONF_THERMAL}`);
+  }
 
-    /* Profile */
+  async function saveProfileConfig() {
     const profileJson = JSON.stringify({
-      power_mode: state.profile.powerMode,
-      auto_gaming: state.profile.autoGaming.enabled ? 1 : 0,
-      gaming_apps: state.profile.autoGaming.apps.join(','),
+      power_mode:   state.profile.powerMode,
+      auto_gaming:  state.profile.autoGaming.enabled ? 1 : 0,
+      gaming_apps:  state.profile.autoGaming.apps.join(','),
     });
-    await exec(`printf '%s' '${esc(profileJson)}' > ${CONF_PROFILE}`);
+    await exec(`printf '%s' '${_esc(profileJson)}' > ${CONF_PROFILE}`);
+  }
+
+  /* Full save — writes all section files at once */
+  async function saveConfig() {
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveCpuConfig();
+    await saveGpuConfig();
+    await saveRamConfig();
+    await saveStorageConfig();
+    await saveThermalConfig();
+    await saveProfileConfig();
   }
 
   /* ─── Public API ──────────────────────────────────────────────────── */
@@ -2725,6 +2974,11 @@
     confirmAddEntry,
     removeRow,
     restoreRow,
+    applyCpu,
+    applyGpu,
+    applyRam,
+    applyStorage,
+    applyProfile,
     applyAll,
     scanAndLoad,
     loadData,
