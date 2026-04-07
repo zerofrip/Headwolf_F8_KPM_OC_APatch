@@ -16,6 +16,7 @@
   const CONF_CPU_OC = `${CONF_DIR}/cpu_oc.json`;
   const CONF_GPU_OC = `${CONF_DIR}/gpu_oc.json`;
   const CONF_GPU_TUNING = `${CONF_DIR}/gpu_tuning.json`;
+  const CONF_CPU_TUNING = `${CONF_DIR}/cpu_tuning.json`;
   const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
   const CONF_DRAM = `${CONF_DIR}/dram.json`;
   const CONF_IO = `${CONF_DIR}/io.json`;
@@ -142,6 +143,17 @@
         maliPrerotate: 0,           // bool: enable pre-rotation
       },
       loaded: false,            // true after first read from device
+    },
+    cpuTuning: {
+      sugovUpRate: 1000,        // µs (stock: 1000)
+      sugovDownRate: 1000,      // µs (stock: 1000)
+      cpuidleMaxState: 6,       // 0-6 (stock: 6 = all states enabled)
+      schedEnergyAware: 1,      // 0=off, 1=on (stock: 1)
+      schedChildRunsFirst: 0,   // 0=off, 1=on (stock: 0)
+      uclampTopAppMin: 0,       // 0-1024 (stock: 0)
+      fpsgoBoostTa: 0,          // 0=off, 1=on (stock: 0)
+      fpsgoRescueEnable: 0,     // 0=off, 1=on (stock: 0)
+      loaded: false,
     },
     profile: {
       powerMode: 1,     // 0=battery, 1=normal, 2=performance
@@ -786,6 +798,90 @@
           <h4 class="setting-section-title">${t('gpu_tuning.vulkan_section')}</h4>
           ${toggleRow('gpu_tuning.vulkan_hwui', 'gpu_tuning.vulkan_hwui_hint', 'vulkanHwui', gt.vulkanHwui)}
           ${toggleRow('gpu_tuning.vulkan_renderengine', 'gpu_tuning.vulkan_renderengine_hint', 'vulkanRenderengine', gt.vulkanRenderengine)}
+        </div>
+      </div>`;
+  }
+
+  /* ─── Render CPU Tuning Card ──────────────────────────────────────── */
+  function renderCpuTuningCard() {
+    const ct = state.cpuTuning;
+    const STOCK = { sugovUpRate: 1000, sugovDownRate: 1000, cpuidleMaxState: 6, uclampTopAppMin: 0 };
+
+    function numRow(labelKey, hintKey, field, val, stockVal, min, max, step, unit) {
+      const isModified = val !== stockVal;
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+            <span class="info-chip ${isModified ? 'freq' : ''}">${val} ${unit}</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <input type="range" class="slider" min="${min}" max="${max}" step="${step}"
+                   value="${val}"
+                   oninput="window.OC.setCpuTuning('${field}', parseInt(this.value)); this.nextElementSibling.textContent=this.value">
+            <span class="slider-val">${val}</span>
+            <span class="slider-label-stock">${t('gpu_tuning.stock')}: ${stockVal}</span>
+          </div>
+        </div>`;
+    }
+
+    function toggleRow(labelKey, hintKey, field, val) {
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <button class="btn btn-sm ${val ? 'btn-primary' : 'btn-secondary'}"
+                    onclick="window.OC.setCpuTuning('${field}', ${val ? 0 : 1})">
+              ${val ? t('misc.on') : t('misc.off')}
+            </button>
+          </div>
+        </div>`;
+    }
+
+    /* cpuidle state names for display */
+    const idleStateNames = ['WFI (1µs)', 'cpuoff (180-377µs)', 'clusteroff (196-563µs)',
+      'mcusysoff (861-1324µs)', 'system-mem (1583µs)', 'system-pll (1633µs)', 'system-bus (3383µs)'];
+    const idleMaxLabel = ct.cpuidleMaxState <= 6
+      ? `${ct.cpuidleMaxState} — ${idleStateNames[ct.cpuidleMaxState] || ''}`
+      : `${ct.cpuidleMaxState}`;
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">⚡ ${t('cpu_tuning.title')}</h3>
+        </div>
+        <div class="card-body settings-list">
+          <h4 class="setting-section-title">${t('cpu_tuning.governor_section')}</h4>
+          ${numRow('cpu_tuning.up_rate_limit', 'cpu_tuning.up_rate_limit_hint', 'sugovUpRate', ct.sugovUpRate, STOCK.sugovUpRate, 0, 5000, 100, 'µs')}
+          ${numRow('cpu_tuning.down_rate_limit', 'cpu_tuning.down_rate_limit_hint', 'sugovDownRate', ct.sugovDownRate, STOCK.sugovDownRate, 0, 5000, 100, 'µs')}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('cpu_tuning.idle_section')}</h4>
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>${t('cpu_tuning.cpuidle_max_state')}</span>
+              <span class="info-chip ${ct.cpuidleMaxState !== STOCK.cpuidleMaxState ? 'freq' : ''}">${idleMaxLabel}</span>
+            </div>
+            <div class="setting-hint">${t('cpu_tuning.cpuidle_max_state_hint')}</div>
+            <div class="setting-control">
+              <input type="range" class="slider" min="0" max="6" step="1"
+                     value="${ct.cpuidleMaxState}"
+                     oninput="window.OC.setCpuTuning('cpuidleMaxState', parseInt(this.value))">
+              <span class="slider-label-stock">${t('gpu_tuning.stock')}: 6</span>
+            </div>
+          </div>
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('cpu_tuning.sched_section')}</h4>
+          ${toggleRow('cpu_tuning.energy_aware', 'cpu_tuning.energy_aware_hint', 'schedEnergyAware', ct.schedEnergyAware)}
+          ${toggleRow('cpu_tuning.child_runs_first', 'cpu_tuning.child_runs_first_hint', 'schedChildRunsFirst', ct.schedChildRunsFirst)}
+          ${numRow('cpu_tuning.uclamp_min', 'cpu_tuning.uclamp_min_hint', 'uclampTopAppMin', ct.uclampTopAppMin, STOCK.uclampTopAppMin, 0, 1024, 64, '')}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('cpu_tuning.fpsgo_section')}</h4>
+          ${toggleRow('cpu_tuning.fpsgo_boost_ta', 'cpu_tuning.fpsgo_boost_ta_hint', 'fpsgoBoostTa', ct.fpsgoBoostTa)}
+          ${toggleRow('cpu_tuning.fpsgo_rescue', 'cpu_tuning.fpsgo_rescue_hint', 'fpsgoRescueEnable', ct.fpsgoRescueEnable)}
         </div>
       </div>`;
   }
@@ -1436,6 +1532,9 @@
     const gpuTuningEl = document.getElementById('gpu-tuning-card');
     if (gpuTuningEl) gpuTuningEl.innerHTML = renderGpuTuningCard();
 
+    const cpuTuningEl = document.getElementById('cpu-tuning-card');
+    if (cpuTuningEl) cpuTuningEl.innerHTML = renderCpuTuningCard();
+
     const ramContainer = document.getElementById('ram-devices');
     if (ramContainer) {      if (state.ram.availableFreqs.length === 0) {
         ramContainer.innerHTML = `
@@ -1637,6 +1736,56 @@
     gt.loaded = true;
   }
 
+  async function _loadCpuTuningSection() {
+    const ct = state.cpuTuning;
+    /* Read live device values */
+    const [upRes, downRes, easRes, childRes, uclampRes, fpsgoTaRes, fpsgoRescRes] = await Promise.all([
+      exec('cat /sys/devices/system/cpu/cpufreq/policy0/sugov_ext/up_rate_limit_us 2>/dev/null'),
+      exec('cat /sys/devices/system/cpu/cpufreq/policy0/sugov_ext/down_rate_limit_us 2>/dev/null'),
+      exec('cat /proc/sys/kernel/sched_energy_aware 2>/dev/null'),
+      exec('cat /proc/sys/kernel/sched_child_runs_first 2>/dev/null'),
+      exec('cat /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null'),
+      exec('cat /sys/kernel/fpsgo/fbt/boost_ta 2>/dev/null'),
+      exec('cat /sys/kernel/fpsgo/fbt/rescue_enable 2>/dev/null'),
+    ]);
+    if (upRes.stdout.trim()) ct.sugovUpRate = parseInt(upRes.stdout.trim(), 10) || ct.sugovUpRate;
+    if (downRes.stdout.trim()) ct.sugovDownRate = parseInt(downRes.stdout.trim(), 10) || ct.sugovDownRate;
+    if (easRes.stdout.trim()) ct.schedEnergyAware = parseInt(easRes.stdout.trim(), 10);
+    if (childRes.stdout.trim()) ct.schedChildRunsFirst = parseInt(childRes.stdout.trim(), 10);
+    if (uclampRes.stdout.trim()) {
+      const pct = parseFloat(uclampRes.stdout.trim());
+      ct.uclampTopAppMin = Math.round(pct / 100 * 1024);
+    }
+    if (fpsgoTaRes.stdout.trim()) ct.fpsgoBoostTa = parseInt(fpsgoTaRes.stdout.trim(), 10) || 0;
+    if (fpsgoRescRes.stdout.trim()) ct.fpsgoRescueEnable = parseInt(fpsgoRescRes.stdout.trim(), 10) || 0;
+
+    /* Also read cpuidle max enabled state */
+    const idleRes = await exec('for s in 0 1 2 3 4 5 6; do d=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state${s}/disable 2>/dev/null); [ -z "$d" ] && break; echo "${s}:${d}"; done');
+    let maxState = 6;
+    for (const line of idleRes.stdout.split('\n')) {
+      const m = line.match(/^(\d+):(\d+)$/);
+      if (m && m[2] === '1') { maxState = parseInt(m[1], 10) - 1; break; }
+    }
+    ct.cpuidleMaxState = maxState >= 0 ? maxState : 0;
+
+    /* Overlay saved config */
+    const cfgRes = await exec(`cat ${CONF_CPU_TUNING} 2>/dev/null`);
+    if (cfgRes.stdout.trim()) {
+      try {
+        const cfg = JSON.parse(cfgRes.stdout.trim());
+        if (cfg.sugov_up_rate_limit_us != null) ct.sugovUpRate = cfg.sugov_up_rate_limit_us;
+        if (cfg.sugov_down_rate_limit_us != null) ct.sugovDownRate = cfg.sugov_down_rate_limit_us;
+        if (cfg.cpuidle_max_state != null) ct.cpuidleMaxState = cfg.cpuidle_max_state;
+        if (cfg.sched_energy_aware != null) ct.schedEnergyAware = cfg.sched_energy_aware;
+        if (cfg.sched_child_runs_first != null) ct.schedChildRunsFirst = cfg.sched_child_runs_first;
+        if (cfg.uclamp_top_app_min != null) ct.uclampTopAppMin = cfg.uclamp_top_app_min;
+        if (cfg.fpsgo_boost_ta != null) ct.fpsgoBoostTa = cfg.fpsgo_boost_ta;
+        if (cfg.fpsgo_rescue_enable != null) ct.fpsgoRescueEnable = cfg.fpsgo_rescue_enable;
+      } catch (e) { /* ignore parse errors */ }
+    }
+    ct.loaded = true;
+  }
+
   async function _loadThermalSection() {
     await loadThermalData();
     const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
@@ -1701,6 +1850,7 @@
     await _loadCpuSection();
     await _loadGpuSection();
     await _loadGpuTuningSection();
+    await _loadCpuTuningSection();
     await _loadThermalSection();
     await _loadProfileSection();
     await _loadRamSection();
@@ -1906,6 +2056,13 @@
     }
     const el = document.getElementById('gpu-tuning-card');
     if (el) el.innerHTML = renderGpuTuningCard();
+  }
+
+  /* ─── CPU Tuning Setter ───────────────────────────────────────────── */
+  function setCpuTuning(field, value) {
+    state.cpuTuning[field] = value;
+    const el = document.getElementById('cpu-tuning-card');
+    if (el) el.innerHTML = renderCpuTuningCard();
   }
 
   /* ─── Apply Thermal Mitigation ────────────────────────────────────── */
@@ -2614,12 +2771,15 @@
     }
 
     await applyThermal();
+    await applyCpuTuning();
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveCpuConfig();
+    await saveCpuTuningConfig();
     await saveThermalConfig();
 
     /* Reload CPU section to reflect applied changes */
     await _loadCpuSection();
+    await _loadCpuTuningSection();
     await _loadThermalSection();
     renderAll();
 
@@ -3282,6 +3442,54 @@
     await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_GPU_TUNING}`);
   }
 
+  /* ─── Apply CPU Tuning (governor, cpuidle, scheduler, uclamp, FPSGO) ── */
+  async function applyCpuTuning() {
+    const ct = state.cpuTuning;
+
+    /* sugov_ext rate limits — apply to all clusters */
+    for (const p of [0, 4, 7]) {
+      const base = `/sys/devices/system/cpu/cpufreq/policy${p}/sugov_ext`;
+      await exec(`echo ${ct.sugovUpRate} > ${base}/up_rate_limit_us 2>/dev/null`);
+      await exec(`echo ${ct.sugovDownRate} > ${base}/down_rate_limit_us 2>/dev/null`);
+    }
+
+    /* cpuidle: disable states above max */
+    for (let cpu = 0; cpu < 8; cpu++) {
+      for (let s = 0; s <= 6; s++) {
+        const val = s > ct.cpuidleMaxState ? 1 : 0;
+        await exec(`echo ${val} > /sys/devices/system/cpu/cpu${cpu}/cpuidle/state${s}/disable 2>/dev/null`);
+      }
+    }
+
+    /* Scheduler */
+    await exec(`echo ${ct.schedEnergyAware} > /proc/sys/kernel/sched_energy_aware 2>/dev/null`);
+    await exec(`echo ${ct.schedChildRunsFirst} > /proc/sys/kernel/sched_child_runs_first 2>/dev/null`);
+
+    /* Uclamp top-app min */
+    const uclampPct = ct.uclampTopAppMin === 0 ? '0.00'
+      : (ct.uclampTopAppMin / 1024 * 100).toFixed(2);
+    await exec(`echo ${uclampPct} > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null`);
+
+    /* FPSGO */
+    await exec(`echo ${ct.fpsgoBoostTa} > /sys/kernel/fpsgo/fbt/boost_ta 2>/dev/null`);
+    await exec(`echo ${ct.fpsgoRescueEnable} > /sys/kernel/fpsgo/fbt/rescue_enable 2>/dev/null`);
+  }
+
+  async function saveCpuTuningConfig() {
+    const ct = state.cpuTuning;
+    const obj = {
+      sugov_up_rate_limit_us: ct.sugovUpRate,
+      sugov_down_rate_limit_us: ct.sugovDownRate,
+      cpuidle_max_state: ct.cpuidleMaxState,
+      sched_energy_aware: ct.schedEnergyAware,
+      sched_child_runs_first: ct.schedChildRunsFirst,
+      uclamp_top_app_min: ct.uclampTopAppMin,
+      fpsgo_boost_ta: ct.fpsgoBoostTa,
+      fpsgo_rescue_enable: ct.fpsgoRescueEnable,
+    };
+    await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_CPU_TUNING}`);
+  }
+
   async function saveRamConfig() {
     const dramJson = JSON.stringify({ dram_min_freq: state.ram.selectedMinFreq || 0 });
     await exec(`printf '%s' '${_esc(dramJson)}' > ${CONF_DRAM}`);
@@ -3361,6 +3569,7 @@
     setThermalMode,
     applyThermal,
     setGpuTuning,
+    setCpuTuning,
     /* Profile & Gaming */
     setPowerMode,
     toggleAutoGaming,

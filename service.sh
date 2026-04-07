@@ -23,6 +23,7 @@ CONF_UFS="${CONF_DIR}/ufs.json"
 CONF_THERMAL="${CONF_DIR}/thermal.json"
 CONF_PROFILE="${CONF_DIR}/profile.json"
 CONF_GPU_TUNING="${CONF_DIR}/gpu_tuning.json"
+CONF_CPU_TUNING="${CONF_DIR}/cpu_tuning.json"
 
 # Legacy single-file config (for migration)
 OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -371,6 +372,74 @@ apply_gpu_tuning() {
 }
 apply_gpu_tuning
 
+# ─── CPU Tuning (governor, cpuidle, scheduler, uclamp, FPSGO) ────────────
+apply_cpu_tuning() {
+    [ -f "${CONF_CPU_TUNING}" ] || return 0
+
+    local up_rate=$(json_int sugov_up_rate_limit_us "${CONF_CPU_TUNING}")
+    local down_rate=$(json_int sugov_down_rate_limit_us "${CONF_CPU_TUNING}")
+    local idle_max=$(json_int cpuidle_max_state "${CONF_CPU_TUNING}")
+    local eas=$(json_int sched_energy_aware "${CONF_CPU_TUNING}")
+    local child_first=$(json_int sched_child_runs_first "${CONF_CPU_TUNING}")
+    local uclamp_min=$(json_int uclamp_top_app_min "${CONF_CPU_TUNING}")
+    local fpsgo_ta=$(json_int fpsgo_boost_ta "${CONF_CPU_TUNING}")
+    local fpsgo_rescue=$(json_int fpsgo_rescue_enable "${CONF_CPU_TUNING}")
+
+    # sugov_ext rate limits (per cluster)
+    for p in 0 4 7; do
+        local ext="/sys/devices/system/cpu/cpufreq/policy${p}/sugov_ext"
+        [ -d "${ext}" ] || continue
+        [ -n "${up_rate}" ] && echo "${up_rate}" > "${ext}/up_rate_limit_us" 2>/dev/null
+        [ -n "${down_rate}" ] && echo "${down_rate}" > "${ext}/down_rate_limit_us" 2>/dev/null
+    done
+    [ -n "${up_rate}" ] && logi "sugov_ext up_rate_limit_us = ${up_rate}"
+    [ -n "${down_rate}" ] && logi "sugov_ext down_rate_limit_us = ${down_rate}"
+
+    # cpuidle: disable deep states above max_state
+    if [ -n "${idle_max}" ]; then
+        for cpu in 0 1 2 3 4 5 6 7; do
+            local base="/sys/devices/system/cpu/cpu${cpu}/cpuidle"
+            [ -d "${base}" ] || continue
+            for s in 0 1 2 3 4 5 6 7 8 9; do
+                local sp="${base}/state${s}"
+                [ -d "${sp}" ] || break
+                if [ "${s}" -gt "${idle_max}" ]; then
+                    echo 1 > "${sp}/disable" 2>/dev/null
+                else
+                    echo 0 > "${sp}/disable" 2>/dev/null
+                fi
+            done
+        done
+        logi "cpuidle max_state = ${idle_max}"
+    fi
+
+    # Scheduler parameters
+    [ -n "${eas}" ] && echo "${eas}" > /proc/sys/kernel/sched_energy_aware 2>/dev/null && \
+        logi "sched_energy_aware = ${eas}"
+    [ -n "${child_first}" ] && echo "${child_first}" > /proc/sys/kernel/sched_child_runs_first 2>/dev/null && \
+        logi "sched_child_runs_first = ${child_first}"
+
+    # Uclamp: top-app min boost
+    if [ -n "${uclamp_min}" ] && [ "${uclamp_min}" -ge 0 ] 2>/dev/null; then
+        local uclamp_pct
+        # Convert 0-1024 to 0.00-100.00 percentage string
+        if [ "${uclamp_min}" -eq 0 ]; then
+            uclamp_pct="0.00"
+        else
+            uclamp_pct=$(awk "BEGIN{printf \"%.2f\", ${uclamp_min}/1024*100}")
+        fi
+        echo "${uclamp_pct}" > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null && \
+            logi "uclamp top-app min = ${uclamp_pct}% (${uclamp_min}/1024)"
+    fi
+
+    # FPSGO frame boost tuning
+    [ -n "${fpsgo_ta}" ] && echo "${fpsgo_ta}" > /sys/kernel/fpsgo/fbt/boost_ta 2>/dev/null && \
+        logi "fpsgo boost_ta = ${fpsgo_ta}"
+    [ -n "${fpsgo_rescue}" ] && echo "${fpsgo_rescue}" > /sys/kernel/fpsgo/fbt/rescue_enable 2>/dev/null && \
+        logi "fpsgo rescue_enable = ${fpsgo_rescue}"
+}
+apply_cpu_tuning
+
 # Late-boot relift (T+45 s): re-apply OC constraints after vendor services
 # (powerhal, fpsgo, thermal_engine) finish initializing and may have issued
 # freq_qos MAX requests capped at the stock max frequency.  This pass also
@@ -589,6 +658,9 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
 
     # ─── Re-apply GPU Mali tuning (vendor services may reset sysfs) ──────
     apply_gpu_tuning
+
+    # ─── Re-apply CPU tuning (vendor services may reset governor/cpuidle) ─
+    apply_cpu_tuning
 
     # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────
     auto_gaming=$(json_int auto_gaming "${CONF_PROFILE}")
