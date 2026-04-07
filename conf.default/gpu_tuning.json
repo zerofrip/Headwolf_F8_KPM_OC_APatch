@@ -1,0 +1,1 @@
+{"mali_dvfs_period":50,"mali_idle_hysteresis_time":10000,"mali_shader_pwroff_timeout":2000,"mali_power_policy":"coarse_demand","mali_csg_scheduling_period":50,"vulkan_hwui":0,"vulkan_renderengine":0}

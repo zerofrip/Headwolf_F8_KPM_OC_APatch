@@ -15,6 +15,7 @@
   const CONF_DIR = `${CONFIG_DIR}/conf`;
   const CONF_CPU_OC = `${CONF_DIR}/cpu_oc.json`;
   const CONF_GPU_OC = `${CONF_DIR}/gpu_oc.json`;
+  const CONF_GPU_TUNING = `${CONF_DIR}/gpu_tuning.json`;
   const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
   const CONF_DRAM = `${CONF_DIR}/dram.json`;
   const CONF_IO = `${CONF_DIR}/io.json`;
@@ -25,6 +26,7 @@
   const GPU_OPP_FILE = `${CONFIG_DIR}/gpu_opp_table`;
   const GPU_DEVFREQ_PATH_FILE = `${CONFIG_DIR}/gpu_devfreq_path`;
   const GPU_DEVFREQ_FALLBACK = '/sys/class/devfreq/13000000.mali';
+  const MALI_SYSFS = '/sys/devices/platform/soc/13000000.mali';
   const DRAM_DEVFREQ = '/sys/class/devfreq/mtk-dvfsrc-devfreq';
   const DRAM_DATA_RATE = '/sys/bus/platform/drivers/dramc_drv/dram_data_rate';
   const DRAM_TYPE_PATH = '/sys/bus/platform/drivers/dramc_drv/dram_type';
@@ -116,6 +118,16 @@
       temps: {},        // { zone_type_string: temp_celsius }
       gpuFixActive: false,    // true when fix_target_opp_index=0 is held
       cpuOrigTrips: [], // [{path, origTemp}] — captured on first loadThermalData for undo
+    },
+    gpuTuning: {
+      dvfsPeriod: 100,          // ms (stock: 100)
+      idleHysteresis: 5000,     // ms (stock: 5000)
+      shaderPwroff: 800,        // ms (stock: 800)
+      powerPolicy: 'coarse_demand',
+      csgPeriod: 100,           // ms (stock: 100)
+      vulkanHwui: 0,            // 0=off, 1=on
+      vulkanRenderengine: 0,    // 0=off, 1=on
+      loaded: false,            // true after first read from device
     },
     profile: {
       powerMode: 1,     // 0=battery, 1=normal, 2=performance
@@ -677,6 +689,79 @@
       </div>`;
 
     return html;
+  }
+
+  /* ─── Render GPU Tuning Card ──────────────────────────────────────── */
+  function renderGpuTuningCard() {
+    const gt = state.gpuTuning;
+    const STOCK = { dvfsPeriod: 100, idleHysteresis: 5000, shaderPwroff: 800, csgPeriod: 100 };
+
+    function numRow(labelKey, hintKey, field, val, stockVal, min, max, step) {
+      const isModified = val !== stockVal;
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+            <span class="info-chip ${isModified ? 'volt' : ''}">${val} ms</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <input type="range" class="slider" min="${min}" max="${max}" step="${step}"
+                   value="${val}"
+                   oninput="window.OC.setGpuTuning('${field}', parseInt(this.value)); this.nextElementSibling.textContent=this.value">
+            <span class="slider-val">${val}</span>
+            <span class="slider-label-stock">${t('gpu_tuning.stock')}: ${stockVal}</span>
+          </div>
+        </div>`;
+    }
+
+    const ppOptions = ['coarse_demand', 'always_on'];
+    const ppHtml = ppOptions.map(pp =>
+      `<button class="btn btn-sm ${gt.powerPolicy === pp ? 'btn-primary gpu-accent' : 'btn-secondary'}"
+              onclick="window.OC.setGpuTuning('powerPolicy', '${pp}')">${pp}</button>`
+    ).join('');
+
+    function toggleRow(labelKey, hintKey, field, val) {
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <button class="btn btn-sm ${val ? 'btn-primary gpu-accent' : 'btn-secondary'}"
+                    onclick="window.OC.setGpuTuning('${field}', ${val ? 0 : 1})">
+              ${val ? t('misc.on') : t('misc.off')}
+            </button>
+          </div>
+        </div>`;
+    }
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title gpu">🎛️ ${t('gpu_tuning.title')}</h3>
+        </div>
+        <div class="card-body settings-list">
+          ${numRow('gpu_tuning.dvfs_period', 'gpu_tuning.dvfs_period_hint', 'dvfsPeriod', gt.dvfsPeriod, STOCK.dvfsPeriod, 10, 200, 10)}
+          ${numRow('gpu_tuning.idle_hysteresis', 'gpu_tuning.idle_hysteresis_hint', 'idleHysteresis', gt.idleHysteresis, STOCK.idleHysteresis, 1000, 50000, 1000)}
+          ${numRow('gpu_tuning.shader_pwroff', 'gpu_tuning.shader_pwroff_hint', 'shaderPwroff', gt.shaderPwroff, STOCK.shaderPwroff, 100, 10000, 100)}
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>${t('gpu_tuning.power_policy')}</span>
+            </div>
+            <div class="setting-hint">${t('gpu_tuning.power_policy_hint')}</div>
+            <div class="setting-control">
+              <div class="btn-group">${ppHtml}</div>
+            </div>
+          </div>
+          ${numRow('gpu_tuning.csg_period', 'gpu_tuning.csg_period_hint', 'csgPeriod', gt.csgPeriod, STOCK.csgPeriod, 10, 200, 10)}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('gpu_tuning.vulkan_section')}</h4>
+          ${toggleRow('gpu_tuning.vulkan_hwui', 'gpu_tuning.vulkan_hwui_hint', 'vulkanHwui', gt.vulkanHwui)}
+          ${toggleRow('gpu_tuning.vulkan_renderengine', 'gpu_tuning.vulkan_renderengine_hint', 'vulkanRenderengine', gt.vulkanRenderengine)}
+        </div>
+      </div>`;
   }
 
   /* ─── Render RAM Card ─────────────────────────────────────────────── */
@@ -1322,6 +1407,9 @@
     const gpuThermalEl = document.getElementById('gpu-thermal-card');
     if (gpuThermalEl) gpuThermalEl.innerHTML = renderThermalCard('gpu');
 
+    const gpuTuningEl = document.getElementById('gpu-tuning-card');
+    if (gpuTuningEl) gpuTuningEl.innerHTML = renderGpuTuningCard();
+
     const ramContainer = document.getElementById('ram-devices');
     if (ramContainer) {      if (state.ram.availableFreqs.length === 0) {
         ramContainer.innerHTML = `
@@ -1472,6 +1560,42 @@
     }
   }
 
+  async function _loadGpuTuningSection() {
+    const gt = state.gpuTuning;
+    /* Read live values from device sysfs */
+    const [dvfsRes, idleRes, pwroffRes, ppRes, csgRes] = await Promise.all([
+      exec(`cat ${MALI_SYSFS}/dvfs_period 2>/dev/null`),
+      exec(`cat ${MALI_SYSFS}/idle_hysteresis_time 2>/dev/null`),
+      exec(`cat ${MALI_SYSFS}/mcu_shader_pwroff_timeout 2>/dev/null`),
+      exec(`cat ${MALI_SYSFS}/power_policy 2>/dev/null`),
+      exec(`cat ${MALI_SYSFS}/csg_scheduling_period 2>/dev/null`),
+    ]);
+    if (dvfsRes.stdout.trim()) gt.dvfsPeriod = parseInt(dvfsRes.stdout.trim(), 10) || gt.dvfsPeriod;
+    if (idleRes.stdout.trim()) gt.idleHysteresis = parseInt(idleRes.stdout.trim(), 10) || gt.idleHysteresis;
+    if (pwroffRes.stdout.trim()) gt.shaderPwroff = parseInt(pwroffRes.stdout.trim(), 10) || gt.shaderPwroff;
+    if (ppRes.stdout.trim()) {
+      const m = ppRes.stdout.match(/\[(\w+)\]/);
+      gt.powerPolicy = m ? m[1] : ppRes.stdout.trim();
+    }
+    if (csgRes.stdout.trim()) gt.csgPeriod = parseInt(csgRes.stdout.trim(), 10) || gt.csgPeriod;
+
+    /* Overlay saved config (used for vulkan toggles which aren't readable from sysfs) */
+    const cfgRes = await exec(`cat ${CONF_GPU_TUNING} 2>/dev/null`);
+    if (cfgRes.stdout.trim()) {
+      try {
+        const cfg = JSON.parse(cfgRes.stdout.trim());
+        if (cfg.mali_dvfs_period > 0) gt.dvfsPeriod = cfg.mali_dvfs_period;
+        if (cfg.mali_idle_hysteresis_time > 0) gt.idleHysteresis = cfg.mali_idle_hysteresis_time;
+        if (cfg.mali_shader_pwroff_timeout > 0) gt.shaderPwroff = cfg.mali_shader_pwroff_timeout;
+        if (cfg.mali_power_policy) gt.powerPolicy = cfg.mali_power_policy;
+        if (cfg.mali_csg_scheduling_period > 0) gt.csgPeriod = cfg.mali_csg_scheduling_period;
+        gt.vulkanHwui = cfg.vulkan_hwui || 0;
+        gt.vulkanRenderengine = cfg.vulkan_renderengine || 0;
+      } catch (e) { /* ignore parse errors */ }
+    }
+    gt.loaded = true;
+  }
+
   async function _loadThermalSection() {
     await loadThermalData();
     const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
@@ -1535,6 +1659,7 @@
 
     await _loadCpuSection();
     await _loadGpuSection();
+    await _loadGpuTuningSection();
     await _loadThermalSection();
     await _loadProfileSection();
     await _loadRamSection();
@@ -1728,6 +1853,13 @@
     else state.thermal.cpuMode = mode;
     const el = document.getElementById(`${type}-thermal-card`);
     if (el) el.innerHTML = renderThermalCard(type);
+  }
+
+  /* ─── GPU Tuning Setter ───────────────────────────────────────────── */
+  function setGpuTuning(field, value) {
+    state.gpuTuning[field] = value;
+    const el = document.getElementById('gpu-tuning-card');
+    if (el) el.innerHTML = renderGpuTuningCard();
   }
 
   /* ─── Apply Thermal Mitigation ────────────────────────────────────── */
@@ -2456,6 +2588,26 @@
     }
   }
 
+  /* ─── Apply GPU Tuning (Mali sysfs + Vulkan props) ─────────────────── */
+  async function applyGpuTuning() {
+    const gt = state.gpuTuning;
+    await exec(`echo ${gt.dvfsPeriod} > ${MALI_SYSFS}/dvfs_period 2>/dev/null`);
+    await exec(`echo ${gt.idleHysteresis} > ${MALI_SYSFS}/idle_hysteresis_time 2>/dev/null`);
+    await exec(`echo ${gt.shaderPwroff} > ${MALI_SYSFS}/mcu_shader_pwroff_timeout 2>/dev/null`);
+    await exec(`echo ${gt.powerPolicy} > ${MALI_SYSFS}/power_policy 2>/dev/null`);
+    await exec(`echo ${gt.csgPeriod} > ${MALI_SYSFS}/csg_scheduling_period 2>/dev/null`);
+    if (gt.vulkanHwui) {
+      await exec('resetprop ro.hwui.use_vulkan true 2>/dev/null || setprop ro.hwui.use_vulkan true 2>/dev/null');
+    } else {
+      await exec('resetprop --delete ro.hwui.use_vulkan 2>/dev/null');
+    }
+    if (gt.vulkanRenderengine) {
+      await exec('setprop debug.renderengine.backend skiavk 2>/dev/null');
+    } else {
+      await exec('setprop debug.renderengine.backend skiagl 2>/dev/null');
+    }
+  }
+
   async function applyGpu() {
     showToast(t('toast.applying'), 'info');
     let anyOcApplied = false;
@@ -2502,12 +2654,15 @@
     }
 
     await applyThermal();
+    await applyGpuTuning();
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveGpuConfig();
+    await saveGpuTuningConfig();
     await saveThermalConfig();
 
     /* Reload GPU section to reflect applied changes */
     await _loadGpuSection();
+    await _loadGpuTuningSection();
     await _loadThermalSection();
     renderAll();
 
@@ -3029,6 +3184,20 @@
     await exec(`printf '%s' '${_esc(JSON.stringify(gpuOcObj))}' > ${CONF_GPU_OC}`);
   }
 
+  async function saveGpuTuningConfig() {
+    const gt = state.gpuTuning;
+    const obj = {
+      mali_dvfs_period: gt.dvfsPeriod,
+      mali_idle_hysteresis_time: gt.idleHysteresis,
+      mali_shader_pwroff_timeout: gt.shaderPwroff,
+      mali_power_policy: gt.powerPolicy,
+      mali_csg_scheduling_period: gt.csgPeriod,
+      vulkan_hwui: gt.vulkanHwui,
+      vulkan_renderengine: gt.vulkanRenderengine,
+    };
+    await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_GPU_TUNING}`);
+  }
+
   async function saveRamConfig() {
     const dramJson = JSON.stringify({ dram_min_freq: state.ram.selectedMinFreq || 0 });
     await exec(`printf '%s' '${_esc(dramJson)}' > ${CONF_DRAM}`);
@@ -3077,6 +3246,7 @@
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveCpuConfig();
     await saveGpuConfig();
+    await saveGpuTuningConfig();
     await saveRamConfig();
     await saveStorageConfig();
     await saveThermalConfig();
@@ -3106,6 +3276,7 @@
     refreshTemps,
     setThermalMode,
     applyThermal,
+    setGpuTuning,
     /* Profile & Gaming */
     setPowerMode,
     toggleAutoGaming,

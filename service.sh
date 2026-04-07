@@ -9,6 +9,8 @@ CPU_OPP_FILE="${CONFIG_DIR}/cpu_opp_table"
 GPU_OPP_FILE="${CONFIG_DIR}/gpu_opp_table"
 CPU_RAW_FILE="${CONFIG_DIR}/cpu_raw_dump"
 UFS_HCI_PATH="/sys/devices/platform/soc/112b0000.ufshci"
+MALI_SYSFS="/sys/devices/platform/soc/13000000.mali"
+MALI_DEBUGFS="/sys/kernel/debug/mali0"
 
 # ─── Split config paths ──────────────────────────────────────────────────
 CONF_DIR="${CONFIG_DIR}/conf"
@@ -20,6 +22,7 @@ CONF_IO="${CONF_DIR}/io.json"
 CONF_UFS="${CONF_DIR}/ufs.json"
 CONF_THERMAL="${CONF_DIR}/thermal.json"
 CONF_PROFILE="${CONF_DIR}/profile.json"
+CONF_GPU_TUNING="${CONF_DIR}/gpu_tuning.json"
 
 # Legacy single-file config (for migration)
 OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -271,6 +274,51 @@ if [ -n "${GPU_DEVFREQ}" ]; then
     echo "${GPU_DEVFREQ}" > "${CONFIG_DIR}/gpu_devfreq_path" 2>/dev/null
 fi
 
+# ─── GPU Mali kbase tuning (sysfs + debugfs) ─────────────────────────────
+apply_gpu_tuning() {
+    [ -f "${CONF_GPU_TUNING}" ] || return 0
+    local mali="${MALI_SYSFS}"
+    local dbg="${MALI_DEBUGFS}"
+
+    # Mali kbase sysfs tunables
+    local dvfs_period=$(json_int mali_dvfs_period "${CONF_GPU_TUNING}")
+    local idle_hyst=$(json_int mali_idle_hysteresis_time "${CONF_GPU_TUNING}")
+    local shader_pwroff=$(json_int mali_shader_pwroff_timeout "${CONF_GPU_TUNING}")
+    local power_pol=$(json_str mali_power_policy "${CONF_GPU_TUNING}")
+    local csg_period=$(json_int mali_csg_scheduling_period "${CONF_GPU_TUNING}")
+
+    if [ -d "${mali}" ]; then
+        [ -n "${dvfs_period}" ] && [ "${dvfs_period}" -gt 0 ] 2>/dev/null && \
+            echo "${dvfs_period}" > "${mali}/dvfs_period" 2>/dev/null && \
+            logi "Mali dvfs_period = ${dvfs_period}"
+        [ -n "${idle_hyst}" ] && [ "${idle_hyst}" -gt 0 ] 2>/dev/null && \
+            echo "${idle_hyst}" > "${mali}/idle_hysteresis_time" 2>/dev/null && \
+            logi "Mali idle_hysteresis_time = ${idle_hyst}"
+        [ -n "${shader_pwroff}" ] && [ "${shader_pwroff}" -gt 0 ] 2>/dev/null && \
+            echo "${shader_pwroff}" > "${mali}/mcu_shader_pwroff_timeout" 2>/dev/null && \
+            logi "Mali mcu_shader_pwroff_timeout = ${shader_pwroff}"
+        [ -n "${power_pol}" ] && \
+            echo "${power_pol}" > "${mali}/power_policy" 2>/dev/null && \
+            logi "Mali power_policy = ${power_pol}"
+        [ -n "${csg_period}" ] && [ "${csg_period}" -gt 0 ] 2>/dev/null && \
+            echo "${csg_period}" > "${mali}/csg_scheduling_period" 2>/dev/null && \
+            logi "Mali csg_scheduling_period = ${csg_period}"
+    fi
+
+    # Vulkan / HWUI system property overrides
+    local vk_hwui=$(json_int vulkan_hwui "${CONF_GPU_TUNING}")
+    local vk_render=$(json_int vulkan_renderengine "${CONF_GPU_TUNING}")
+    if [ "${vk_hwui}" = "1" ] 2>/dev/null; then
+        resetprop ro.hwui.use_vulkan true 2>/dev/null || setprop ro.hwui.use_vulkan true 2>/dev/null
+        logi "Vulkan HWUI enabled"
+    fi
+    if [ "${vk_render}" = "1" ] 2>/dev/null; then
+        setprop debug.renderengine.backend skiavk 2>/dev/null
+        logi "RenderEngine backend = skiavk"
+    fi
+}
+apply_gpu_tuning
+
 # Late-boot relift (T+45 s): re-apply OC constraints after vendor services
 # (powerhal, fpsgo, thermal_engine) finish initializing and may have issued
 # freq_qos MAX requests capped at the stock max frequency.  This pass also
@@ -324,6 +372,8 @@ while true; do
             t=$(cat "${cd}type" 2>/dev/null)
             case "$t" in *mali*|*gpu*|*GPU*|*GED*) echo 0 > "${cd}cur_state" 2>/dev/null;; esac
         done
+        # GPU power_policy → always_on (eliminates power gating latency)
+        echo always_on > /sys/devices/platform/soc/13000000.mali/power_policy 2>/dev/null
         echo 6400000000 > "${DRAM_DF}/min_freq" 2>/dev/null
         log -t "KPM_OC" "Gaming boost ON: $FG"
         BOOSTED=1
@@ -331,6 +381,9 @@ while true; do
         # Revert to saved power mode
         pm=$(_ji power_mode "$CONF/profile.json")
         pm=${pm:-1}
+        # Restore GPU power_policy from gpu_tuning config (default: coarse_demand)
+        GP=$(_js mali_power_policy "$CONF/gpu_tuning.json")
+        echo "${GP:-coarse_demand}" > /sys/devices/platform/soc/13000000.mali/power_policy 2>/dev/null
         case $pm in
             0) # Battery Save
                 echo 1600000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null
@@ -481,6 +534,9 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
         [ -n "${ufs_spm}" ] && printf '%s' "${ufs_spm}" | tee "${UFS_HCI_PATH}/spm_lvl" > /dev/null 2>&1 && \
             logi "UFS SPM Level = ${ufs_spm}"
     fi
+
+    # ─── Re-apply GPU Mali tuning (vendor services may reset sysfs) ──────
+    apply_gpu_tuning
 
     # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────
     auto_gaming=$(json_int auto_gaming "${CONF_PROFILE}")

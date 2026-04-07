@@ -64,6 +64,26 @@
       'gpu.add_volt_placeholder': 'Voltage (µV)',
       'gpu.opp_added': 'New GPU OPP added ({freq})',
 
+      /* GPU Tuning */
+      'gpu_tuning.title': 'GPU Tuning · Mali kbase',
+      'gpu_tuning.dvfs_period': 'DVFS Period',
+      'gpu_tuning.dvfs_period_hint': 'GPU DVFS polling interval (ms). Lower = faster freq response',
+      'gpu_tuning.idle_hysteresis': 'Idle Hysteresis',
+      'gpu_tuning.idle_hysteresis_hint': 'Time GPU stays awake after idle (ms). Higher = less wake latency',
+      'gpu_tuning.shader_pwroff': 'Shader Poweroff Timeout',
+      'gpu_tuning.shader_pwroff_hint': 'MCU/shader core poweroff delay (ms). Higher = less core wake latency',
+      'gpu_tuning.power_policy': 'Power Policy',
+      'gpu_tuning.power_policy_hint': 'coarse_demand = normal DVFS; always_on = no power gating (⚠ battery drain)',
+      'gpu_tuning.csg_period': 'CSG Scheduling Period',
+      'gpu_tuning.csg_period_hint': 'Command stream group scheduling interval (ms). Lower = faster dispatch',
+      'gpu_tuning.vulkan_section': 'Vulkan / HWUI',
+      'gpu_tuning.vulkan_hwui': 'Vulkan HWUI',
+      'gpu_tuning.vulkan_hwui_hint': 'Use Vulkan for Android UI rendering (ro.hwui.use_vulkan). May cause glitches',
+      'gpu_tuning.vulkan_renderengine': 'Vulkan RenderEngine',
+      'gpu_tuning.vulkan_renderengine_hint': 'Use Vulkan for SurfaceFlinger (debug.renderengine.backend=skiavk)',
+      'gpu_tuning.stock': 'Stock',
+      'gpu_tuning.tuned': 'Tuned',
+
       /* RAM */
       'ram.title': 'DRAM · {type}',
       'ram.data_rate': 'Data Rate',
@@ -260,6 +280,26 @@
       'gpu.add_freq_placeholder': '周波数 (MHz)',
       'gpu.add_volt_placeholder': '電圧 (µV)',
       'gpu.opp_added': 'GPU OPPを追加しました ({freq})',
+
+      /* GPU Tuning */
+      'gpu_tuning.title': 'GPUチューニング · Mali kbase',
+      'gpu_tuning.dvfs_period': 'DVFS周期',
+      'gpu_tuning.dvfs_period_hint': 'GPU DVFSポーリング間隔 (ms)。低い = 周波数応答が速い',
+      'gpu_tuning.idle_hysteresis': 'アイドルヒステリシス',
+      'gpu_tuning.idle_hysteresis_hint': 'アイドル後GPUが起動状態を維持する時間 (ms)。高い = 復帰レイテンシが低い',
+      'gpu_tuning.shader_pwroff': 'シェーダ電源オフタイムアウト',
+      'gpu_tuning.shader_pwroff_hint': 'MCU/シェーダコアの電源オフ遅延 (ms)。高い = コア復帰レイテンシが低い',
+      'gpu_tuning.power_policy': '電力ポリシー',
+      'gpu_tuning.power_policy_hint': 'coarse_demand = 通常DVFS; always_on = パワーゲーティング無効 (⚠ バッテリー消費増)',
+      'gpu_tuning.csg_period': 'CSGスケジューリング周期',
+      'gpu_tuning.csg_period_hint': 'コマンドストリームグループのスケジューリング間隔 (ms)。低い = ディスパッチが速い',
+      'gpu_tuning.vulkan_section': 'Vulkan / HWUI',
+      'gpu_tuning.vulkan_hwui': 'Vulkan HWUI',
+      'gpu_tuning.vulkan_hwui_hint': 'Android UIレンダリングにVulkanを使用 (ro.hwui.use_vulkan)。不具合の可能性あり',
+      'gpu_tuning.vulkan_renderengine': 'Vulkan RenderEngine',
+      'gpu_tuning.vulkan_renderengine_hint': 'SurfaceFlingerにVulkanを使用 (debug.renderengine.backend=skiavk)',
+      'gpu_tuning.stock': 'ストック',
+      'gpu_tuning.tuned': 'チューニング済',
 
       /* RAM */
       'ram.title': 'DRAM · {type}',
