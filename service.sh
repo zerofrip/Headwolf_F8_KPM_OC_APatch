@@ -24,6 +24,7 @@ CONF_THERMAL="${CONF_DIR}/thermal.json"
 CONF_PROFILE="${CONF_DIR}/profile.json"
 CONF_GPU_TUNING="${CONF_DIR}/gpu_tuning.json"
 CONF_CPU_TUNING="${CONF_DIR}/cpu_tuning.json"
+CONF_DISPLAY="${CONF_DIR}/display_tuning.json"
 
 # Legacy single-file config (for migration)
 OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -47,6 +48,10 @@ resolve_gpu_devfreq_path() {
 # ─── JSON helpers (second arg = file path) ────────────────────────────────
 json_int() {
     grep -o "\"$1\":[0-9]*" "$2" 2>/dev/null | head -1 | grep -o '[0-9]*$'
+}
+
+json_float() {
+    grep -o "\"$1\":[0-9.]*" "$2" 2>/dev/null | head -1 | sed 's/.*://'
 }
 
 json_str() {
@@ -440,6 +445,79 @@ apply_cpu_tuning() {
 }
 apply_cpu_tuning
 
+# ─── Display Tuning ──────────────────────────────────────────────────────
+apply_display_tuning() {
+    [ -f "${CONF_DISPLAY}" ] || return 0
+
+    local rmode=$(cat "${CONF_DISPLAY}" | grep -o '"refresh_mode":"[^"]*"' | cut -d'"' -f4)
+    local peak_rr=$(json_int peak_refresh_rate "${CONF_DISPLAY}")
+    local min_rr=$(json_int min_refresh_rate "${CONF_DISPLAY}")
+    local anim_dur=$(json_float animator_duration "${CONF_DISPLAY}")
+    local trans_dur=$(json_float transition_duration "${CONF_DISPLAY}")
+    local win_dur=$(json_float window_duration "${CONF_DISPLAY}")
+    local color_sat=$(json_float color_saturation "${CONF_DISPLAY}")
+    local shp_idx=$(json_int sharpness_idx "${CONF_DISPLAY}")
+    local ultra_res=$(json_int ultra_resolution "${CONF_DISPLAY}")
+    local dre_en=$(json_int dre_enable "${CONF_DISPLAY}")
+    local hdr_adp=$(json_int hdr_adaptive "${CONF_DISPLAY}")
+    local hfg=$(json_int hfg_level "${CONF_DISPLAY}")
+    local idle_time=$(json_int display_idle_time "${CONF_DISPLAY}")
+
+    # Refresh rate
+    if [ "${rmode}" = "adaptive" ]; then
+        # Adaptive: min must be >61 to bypass OEM DEFAULT_REFRESH_RATE vote (max=61)
+        [ -z "${min_rr}" ] && min_rr=90
+        [ "${min_rr}" -le 61 ] 2>/dev/null && min_rr=90
+        logi "refresh_mode = adaptive"
+    else
+        # Fixed: lock min = peak
+        [ -n "${peak_rr}" ] && min_rr="${peak_rr}"
+    fi
+    [ -n "${peak_rr}" ] && settings put system peak_refresh_rate "${peak_rr}" 2>/dev/null && \
+        logi "peak_refresh_rate = ${peak_rr}"
+    [ -n "${min_rr}" ] && settings put system min_refresh_rate "${min_rr}" 2>/dev/null && \
+        logi "min_refresh_rate = ${min_rr}"
+
+    # Animation scales
+    [ -n "${anim_dur}" ] && settings put global animator_duration_scale "${anim_dur}" 2>/dev/null && \
+        logi "animator_duration_scale = ${anim_dur}"
+    [ -n "${trans_dur}" ] && settings put global transition_animation_scale "${trans_dur}" 2>/dev/null && \
+        logi "transition_animation_scale = ${trans_dur}"
+    [ -n "${win_dur}" ] && settings put global window_animation_scale "${win_dur}" 2>/dev/null && \
+        logi "window_animation_scale = ${win_dur}"
+
+    # Color saturation (SurfaceFlinger)
+    [ -n "${color_sat}" ] && resetprop persist.sys.sf.color_saturation "${color_sat}" 2>/dev/null && \
+        logi "color_saturation = ${color_sat}"
+
+    # MTK PQ: sharpness
+    [ -n "${shp_idx}" ] && resetprop persist.vendor.sys.pq.shp.idx "${shp_idx}" 2>/dev/null && \
+        logi "sharpness idx = ${shp_idx}"
+
+    # MTK PQ: ultra resolution
+    [ -n "${ultra_res}" ] && resetprop persist.vendor.sys.pq.ultrares.en "${ultra_res}" 2>/dev/null && \
+        logi "ultra_resolution = ${ultra_res}"
+
+    # MTK PQ: DRE (Dynamic Range Enhancement)
+    [ -n "${dre_en}" ] && resetprop persist.vendor.sys.pq.mdp.dre.en "${dre_en}" 2>/dev/null && \
+        resetprop persist.vendor.sys.pq.mdp.vp.dre.en "${dre_en}" 2>/dev/null && \
+        logi "DRE = ${dre_en}"
+
+    # MTK PQ: HDR10 adaptive TM
+    [ -n "${hdr_adp}" ] && resetprop persist.vendor.sys.pq.hdr10.adaptive.en "${hdr_adp}" 2>/dev/null && \
+        resetprop persist.vendor.sys.pq.hdr10p.adaptive.en "${hdr_adp}" 2>/dev/null && \
+        logi "HDR adaptive = ${hdr_adp}"
+
+    # MTK PQ: HFG (high frequency grain)
+    [ -n "${hfg}" ] && resetprop persist.vendor.sys.pq.hfg.en "${hfg}" 2>/dev/null && \
+        logi "HFG = ${hfg}"
+
+    # Display idle timeout
+    [ -n "${idle_time}" ] && echo "${idle_time}" > /proc/displowpower/idletime 2>/dev/null && \
+        logi "display idle time = ${idle_time} ms"
+}
+apply_display_tuning
+
 # Late-boot relift (T+45 s): re-apply OC constraints after vendor services
 # (powerhal, fpsgo, thermal_engine) finish initializing and may have issued
 # freq_qos MAX requests capped at the stock max frequency.  This pass also
@@ -661,6 +739,9 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
 
     # ─── Re-apply CPU tuning (vendor services may reset governor/cpuidle) ─
     apply_cpu_tuning
+
+    # ─── Re-apply display tuning (vendor services may reset props) ────
+    apply_display_tuning
 
     # ─── Auto Gaming Monitor Daemon ──────────────────────────────────────
     auto_gaming=$(json_int auto_gaming "${CONF_PROFILE}")

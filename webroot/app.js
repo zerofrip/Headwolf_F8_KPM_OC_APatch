@@ -17,6 +17,7 @@
   const CONF_GPU_OC = `${CONF_DIR}/gpu_oc.json`;
   const CONF_GPU_TUNING = `${CONF_DIR}/gpu_tuning.json`;
   const CONF_CPU_TUNING = `${CONF_DIR}/cpu_tuning.json`;
+  const CONF_DISPLAY = `${CONF_DIR}/display_tuning.json`;
   const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
   const CONF_DRAM = `${CONF_DIR}/dram.json`;
   const CONF_IO = `${CONF_DIR}/io.json`;
@@ -153,6 +154,22 @@
       uclampTopAppMin: 0,       // 0-1024 (stock: 0)
       fpsgoBoostTa: 0,          // 0=off, 1=on (stock: 0)
       fpsgoRescueEnable: 0,     // 0=off, 1=on (stock: 0)
+      loaded: false,
+    },
+    displayTuning: {
+      refreshMode: 'fixed',     // 'fixed' | 'adaptive'
+      peakRefreshRate: 144,     // 60/90/120/144
+      minRefreshRate: 144,      // 60/90/120/144 (auto-derived in adaptive mode)
+      animatorDuration: 1.0,    // 0/0.5/1.0
+      transitionDuration: 1.0,  // 0/0.5/1.0
+      windowDuration: 1.0,      // 0/0.5/1.0
+      colorSaturation: 1.1,     // 0.8-1.3
+      sharpnessIdx: 2,          // 0-3
+      ultraResolution: 1,       // 0=off, 1=on
+      dreEnable: 1,             // 0=off, 1=on
+      hdrAdaptive: 1,           // 0=off, 1=on
+      hfgLevel: 2,              // 0/1/2
+      displayIdleTime: 33,      // ms
       loaded: false,
     },
     profile: {
@@ -886,6 +903,132 @@
       </div>`;
   }
 
+  /* ─── Render Display Tuning Card ──────────────────────────────────── */
+  function renderDisplayTuningCard() {
+    const dt = state.displayTuning;
+    const STOCK = { peakRefreshRate: 144, minRefreshRate: 144, animatorDuration: 1.0,
+      transitionDuration: 1.0, windowDuration: 1.0, colorSaturation: 1.1,
+      sharpnessIdx: 2, ultraResolution: 1, dreEnable: 1, hdrAdaptive: 1, hfgLevel: 2, displayIdleTime: 33 };
+
+    const rrOpts = [60, 90, 120, 144];
+
+    function selectRow(labelKey, hintKey, field, val, stockVal, options, unit) {
+      const isModified = val !== stockVal;
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+            <span class="info-chip ${isModified ? 'freq' : ''}">${val} ${unit}</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control btn-row">
+            ${options.map(o => `<button class="btn btn-sm ${o === val ? 'btn-primary' : 'btn-secondary'}"
+              onclick="window.OC.setDisplayTuning('${field}', ${o})">${o}</button>`).join(' ')}
+          </div>
+        </div>`;
+    }
+
+    function sliderRow(labelKey, hintKey, field, val, stockVal, min, max, step, unit) {
+      const isModified = val !== stockVal;
+      const displayVal = typeof val === 'number' && val % 1 !== 0 ? val.toFixed(1) : val;
+      return `
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>${t(labelKey)}</span>
+            <span class="info-chip ${isModified ? 'freq' : ''}">${displayVal} ${unit}</span>
+          </div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <input type="range" class="slider" min="${min}" max="${max}" step="${step}"
+                   value="${val}"
+                   oninput="window.OC.setDisplayTuning('${field}', parseFloat(this.value)); this.nextElementSibling.textContent=parseFloat(this.value).toFixed(1)">
+            <span class="slider-val">${displayVal}</span>
+          </div>
+        </div>`;
+    }
+
+    function toggleRow(labelKey, hintKey, field, val) {
+      return `
+        <div class="setting-row">
+          <div class="setting-label"><span>${t(labelKey)}</span></div>
+          <div class="setting-hint">${t(hintKey)}</div>
+          <div class="setting-control">
+            <button class="btn btn-sm ${val ? 'btn-primary' : 'btn-secondary'}"
+                    onclick="window.OC.setDisplayTuning('${field}', ${val ? 0 : 1})">
+              ${val ? t('misc.on') : t('misc.off')}
+            </button>
+          </div>
+        </div>`;
+    }
+
+    const shpLabels = ['OFF', t('display.shp_low'), t('display.shp_mid'), t('display.shp_high')];
+    const hfgLabels = ['OFF', t('display.hfg_low'), t('display.hfg_high')];
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">🖥️ ${t('display.title')}</h3>
+        </div>
+        <div class="card-body settings-list">
+          <h4 class="setting-section-title">${t('display.refresh_section')}</h4>
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>${t('display.refresh_mode')}</span>
+              <span class="info-chip ${dt.refreshMode !== 'fixed' ? 'freq' : ''}">${dt.refreshMode === 'adaptive' ? t('display.mode_adaptive') : t('display.mode_fixed')}</span>
+            </div>
+            <div class="setting-hint">${t('display.refresh_mode_hint')}</div>
+            <div class="setting-control btn-row">
+              <button class="btn btn-sm ${dt.refreshMode === 'fixed' ? 'btn-primary' : 'btn-secondary'}"
+                onclick="window.OC.setDisplayTuning('refreshMode', 'fixed')">${t('display.mode_fixed')}</button>
+              <button class="btn btn-sm ${dt.refreshMode === 'adaptive' ? 'btn-primary' : 'btn-secondary'}"
+                onclick="window.OC.setDisplayTuning('refreshMode', 'adaptive')">${t('display.mode_adaptive')}</button>
+            </div>
+          </div>
+          ${dt.refreshMode === 'fixed'
+            ? selectRow('display.peak_rr', 'display.fixed_rr_hint', 'peakRefreshRate', dt.peakRefreshRate, STOCK.peakRefreshRate, rrOpts, 'Hz')
+            : `${selectRow('display.peak_rr', 'display.adaptive_peak_hint', 'peakRefreshRate', dt.peakRefreshRate, STOCK.peakRefreshRate, rrOpts, 'Hz')}
+               ${selectRow('display.min_rr', 'display.adaptive_min_hint', 'minRefreshRate', dt.minRefreshRate, 90, [90, 120], 'Hz')}`
+          }
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('display.animation_section')}</h4>
+          ${selectRow('display.animator', 'display.animator_hint', 'animatorDuration', dt.animatorDuration, STOCK.animatorDuration, [0, 0.5, 1.0], 'x')}
+          ${selectRow('display.transition', 'display.transition_hint', 'transitionDuration', dt.transitionDuration, STOCK.transitionDuration, [0, 0.5, 1.0], 'x')}
+          ${selectRow('display.window', 'display.window_hint', 'windowDuration', dt.windowDuration, STOCK.windowDuration, [0, 0.5, 1.0], 'x')}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('display.pq_section')}</h4>
+          ${sliderRow('display.color_sat', 'display.color_sat_hint', 'colorSaturation', dt.colorSaturation, STOCK.colorSaturation, 0.8, 1.3, 0.1, '')}
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>${t('display.sharpness')}</span>
+              <span class="info-chip ${dt.sharpnessIdx !== STOCK.sharpnessIdx ? 'freq' : ''}">${shpLabels[dt.sharpnessIdx] || dt.sharpnessIdx}</span>
+            </div>
+            <div class="setting-hint">${t('display.sharpness_hint')}</div>
+            <div class="setting-control btn-row">
+              ${[0,1,2,3].map(i => `<button class="btn btn-sm ${i === dt.sharpnessIdx ? 'btn-primary' : 'btn-secondary'}"
+                onclick="window.OC.setDisplayTuning('sharpnessIdx', ${i})">${shpLabels[i]}</button>`).join(' ')}
+            </div>
+          </div>
+          ${toggleRow('display.ultra_res', 'display.ultra_res_hint', 'ultraResolution', dt.ultraResolution)}
+          ${toggleRow('display.dre', 'display.dre_hint', 'dreEnable', dt.dreEnable)}
+          ${toggleRow('display.hdr_adaptive', 'display.hdr_adaptive_hint', 'hdrAdaptive', dt.hdrAdaptive)}
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>${t('display.hfg')}</span>
+              <span class="info-chip ${dt.hfgLevel !== STOCK.hfgLevel ? 'freq' : ''}">${hfgLabels[dt.hfgLevel] || dt.hfgLevel}</span>
+            </div>
+            <div class="setting-hint">${t('display.hfg_hint')}</div>
+            <div class="setting-control btn-row">
+              ${[0,1,2].map(i => `<button class="btn btn-sm ${i === dt.hfgLevel ? 'btn-primary' : 'btn-secondary'}"
+                onclick="window.OC.setDisplayTuning('hfgLevel', ${i})">${hfgLabels[i]}</button>`).join(' ')}
+            </div>
+          </div>
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('display.power_section')}</h4>
+          ${sliderRow('display.idle_time', 'display.idle_time_hint', 'displayIdleTime', dt.displayIdleTime, STOCK.displayIdleTime, 8, 100, 1, 'ms')}
+        </div>
+      </div>`;
+  }
+
   /* ─── Render RAM Card ─────────────────────────────────────────────── */
   function renderRamCard() {
     const r = state.ram;
@@ -1535,6 +1678,9 @@
     const cpuTuningEl = document.getElementById('cpu-tuning-card');
     if (cpuTuningEl) cpuTuningEl.innerHTML = renderCpuTuningCard();
 
+    const displayTuningEl = document.getElementById('display-tuning-card');
+    if (displayTuningEl) displayTuningEl.innerHTML = renderDisplayTuningCard();
+
     const ramContainer = document.getElementById('ram-devices');
     if (ramContainer) {      if (state.ram.availableFreqs.length === 0) {
         ramContainer.innerHTML = `
@@ -1786,6 +1932,67 @@
     ct.loaded = true;
   }
 
+  async function _loadDisplayTuningSection() {
+    const dt = state.displayTuning;
+    /* Read live values */
+    const [peakRes, minRes, animRes, transRes, winRes, csatRes, shpRes, uresRes, dreRes, hdrRes, hfgRes, idleRes] = await Promise.all([
+      exec('settings get system peak_refresh_rate 2>/dev/null'),
+      exec('settings get system min_refresh_rate 2>/dev/null'),
+      exec('settings get global animator_duration_scale 2>/dev/null'),
+      exec('settings get global transition_animation_scale 2>/dev/null'),
+      exec('settings get global window_animation_scale 2>/dev/null'),
+      exec('getprop persist.sys.sf.color_saturation'),
+      exec('getprop persist.vendor.sys.pq.shp.idx'),
+      exec('getprop persist.vendor.sys.pq.ultrares.en'),
+      exec('getprop persist.vendor.sys.pq.mdp.dre.en'),
+      exec('getprop persist.vendor.sys.pq.hdr10.adaptive.en'),
+      exec('getprop persist.vendor.sys.pq.hfg.en'),
+      exec('cat /proc/displowpower/idletime 2>/dev/null'),
+    ]);
+    const pi = (r, d) => { const v = parseInt(r.stdout.trim(), 10); return isNaN(v) ? d : v; };
+    const pf = (r, d) => { const v = parseFloat(r.stdout.trim()); return isNaN(v) ? d : v; };
+    const ps = (r) => r.stdout.trim();
+
+    if (ps(peakRes) && ps(peakRes) !== 'null') dt.peakRefreshRate = pi(peakRes, dt.peakRefreshRate);
+    if (ps(minRes) && ps(minRes) !== 'null') dt.minRefreshRate = pi(minRes, dt.minRefreshRate);
+    if (ps(animRes) && ps(animRes) !== 'null') dt.animatorDuration = pf(animRes, dt.animatorDuration);
+    if (ps(transRes) && ps(transRes) !== 'null') dt.transitionDuration = pf(transRes, dt.transitionDuration);
+    if (ps(winRes) && ps(winRes) !== 'null') dt.windowDuration = pf(winRes, dt.windowDuration);
+    if (ps(csatRes)) dt.colorSaturation = pf(csatRes, dt.colorSaturation);
+    if (ps(shpRes)) dt.sharpnessIdx = pi(shpRes, dt.sharpnessIdx);
+    if (ps(uresRes)) dt.ultraResolution = pi(uresRes, dt.ultraResolution);
+    if (ps(dreRes)) dt.dreEnable = pi(dreRes, dt.dreEnable);
+    if (ps(hdrRes)) dt.hdrAdaptive = pi(hdrRes, dt.hdrAdaptive);
+    if (ps(hfgRes)) dt.hfgLevel = pi(hfgRes, dt.hfgLevel);
+    if (ps(idleRes)) dt.displayIdleTime = pi(idleRes, dt.displayIdleTime);
+
+    /* Overlay saved config */
+    const cfgRes = await exec(`cat ${CONF_DISPLAY} 2>/dev/null`);
+    if (cfgRes.stdout.trim()) {
+      try {
+        const cfg = JSON.parse(cfgRes.stdout.trim());
+        if (cfg.refresh_mode) dt.refreshMode = cfg.refresh_mode;
+        if (cfg.peak_refresh_rate != null) dt.peakRefreshRate = cfg.peak_refresh_rate;
+        if (cfg.min_refresh_rate != null) dt.minRefreshRate = cfg.min_refresh_rate;
+        if (cfg.animator_duration != null) dt.animatorDuration = cfg.animator_duration;
+        if (cfg.transition_duration != null) dt.transitionDuration = cfg.transition_duration;
+        if (cfg.window_duration != null) dt.windowDuration = cfg.window_duration;
+        if (cfg.color_saturation != null) dt.colorSaturation = cfg.color_saturation;
+        if (cfg.sharpness_idx != null) dt.sharpnessIdx = cfg.sharpness_idx;
+        if (cfg.ultra_resolution != null) dt.ultraResolution = cfg.ultra_resolution;
+        if (cfg.dre_enable != null) dt.dreEnable = cfg.dre_enable;
+        if (cfg.hdr_adaptive != null) dt.hdrAdaptive = cfg.hdr_adaptive;
+        if (cfg.hfg_level != null) dt.hfgLevel = cfg.hfg_level;
+        if (cfg.display_idle_time != null) dt.displayIdleTime = cfg.display_idle_time;
+      } catch (e) { /* ignore */ }
+    }
+    /* Derive mode from peak/min if not explicitly saved */
+    if (!dt.refreshMode || (dt.refreshMode !== 'fixed' && dt.refreshMode !== 'adaptive')) {
+      dt.refreshMode = (dt.peakRefreshRate === dt.minRefreshRate) ? 'fixed' : 'adaptive';
+    }
+    dt.loaded = true;
+  }
+
   async function _loadThermalSection() {
     await loadThermalData();
     const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
@@ -1851,6 +2058,7 @@
     await _loadGpuSection();
     await _loadGpuTuningSection();
     await _loadCpuTuningSection();
+    await _loadDisplayTuningSection();
     await _loadThermalSection();
     await _loadProfileSection();
     await _loadRamSection();
@@ -2063,6 +2271,22 @@
     state.cpuTuning[field] = value;
     const el = document.getElementById('cpu-tuning-card');
     if (el) el.innerHTML = renderCpuTuningCard();
+  }
+
+  /* ─── Display Tuning Setter ─────────────────────────────────────── */
+  function setDisplayTuning(field, value) {
+    const dt = state.displayTuning;
+    dt[field] = value;
+    /* In fixed mode, lock min = peak */
+    if (field === 'refreshMode' && value === 'fixed') {
+      dt.minRefreshRate = dt.peakRefreshRate;
+    } else if (field === 'refreshMode' && value === 'adaptive') {
+      dt.minRefreshRate = 90;
+    } else if (field === 'peakRefreshRate' && dt.refreshMode === 'fixed') {
+      dt.minRefreshRate = value;
+    }
+    const el = document.getElementById('display-tuning-card');
+    if (el) el.innerHTML = renderDisplayTuningCard();
   }
 
   /* ─── Apply Thermal Mitigation ────────────────────────────────────── */
@@ -2906,6 +3130,16 @@
     }
   }
 
+  async function applyDisplay() {
+    showToast(t('toast.applying'), 'info');
+    await applyDisplayTuning();
+    await exec(`mkdir -p ${CONF_DIR}`);
+    await saveDisplayTuningConfig();
+    await _loadDisplayTuningSection();
+    renderAll();
+    showToast(t('toast.saved'), 'success');
+  }
+
   async function applyRam() {
     showToast(t('toast.applying'), 'info');
 
@@ -3490,6 +3724,45 @@
     await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_CPU_TUNING}`);
   }
 
+  /* ─── Apply Display Tuning (refresh, animation, PQ, idle) ──────── */
+  async function applyDisplayTuning() {
+    const dt = state.displayTuning;
+    await exec(`settings put system peak_refresh_rate ${dt.peakRefreshRate} 2>/dev/null`);
+    await exec(`settings put system min_refresh_rate ${dt.minRefreshRate} 2>/dev/null`);
+    await exec(`settings put global animator_duration_scale ${dt.animatorDuration} 2>/dev/null`);
+    await exec(`settings put global transition_animation_scale ${dt.transitionDuration} 2>/dev/null`);
+    await exec(`settings put global window_animation_scale ${dt.windowDuration} 2>/dev/null`);
+    await exec(`resetprop persist.sys.sf.color_saturation ${dt.colorSaturation} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.shp.idx ${dt.sharpnessIdx} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.ultrares.en ${dt.ultraResolution} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.mdp.dre.en ${dt.dreEnable} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.mdp.vp.dre.en ${dt.dreEnable} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.hdr10.adaptive.en ${dt.hdrAdaptive} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.hdr10p.adaptive.en ${dt.hdrAdaptive} 2>/dev/null`);
+    await exec(`resetprop persist.vendor.sys.pq.hfg.en ${dt.hfgLevel} 2>/dev/null`);
+    await exec(`echo ${dt.displayIdleTime} > /proc/displowpower/idletime 2>/dev/null`);
+  }
+
+  async function saveDisplayTuningConfig() {
+    const dt = state.displayTuning;
+    const obj = {
+      refresh_mode: dt.refreshMode,
+      peak_refresh_rate: dt.peakRefreshRate,
+      min_refresh_rate: dt.minRefreshRate,
+      animator_duration: dt.animatorDuration,
+      transition_duration: dt.transitionDuration,
+      window_duration: dt.windowDuration,
+      color_saturation: dt.colorSaturation,
+      sharpness_idx: dt.sharpnessIdx,
+      ultra_resolution: dt.ultraResolution,
+      dre_enable: dt.dreEnable,
+      hdr_adaptive: dt.hdrAdaptive,
+      hfg_level: dt.hfgLevel,
+      display_idle_time: dt.displayIdleTime,
+    };
+    await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_DISPLAY}`);
+  }
+
   async function saveRamConfig() {
     const dramJson = JSON.stringify({ dram_min_freq: state.ram.selectedMinFreq || 0 });
     await exec(`printf '%s' '${_esc(dramJson)}' > ${CONF_DRAM}`);
@@ -3561,6 +3834,7 @@
     applyGpu,
     applyRam,
     applyStorage,
+    applyDisplay,
     applyProfile,
     applyAll,
     scanAndLoad,
@@ -3570,6 +3844,7 @@
     applyThermal,
     setGpuTuning,
     setCpuTuning,
+    setDisplayTuning,
     /* Profile & Gaming */
     setPowerMode,
     toggleAutoGaming,

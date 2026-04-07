@@ -33,6 +33,9 @@
   --accent-storage: #10b981;
   --accent-storage-glow: rgba(16, 185, 129, 0.3);
   --accent-storage-dim: rgba(16, 185, 129, 0.15);
+  --accent-display: #a78bfa;
+  --accent-display-glow: rgba(167, 139, 250, 0.3);
+  --accent-display-dim: rgba(167, 139, 250, 0.15);
   --accent-success: #10b981;
   --accent-success-glow: rgba(16, 185, 129, 0.3);
   --accent-danger: #ef4444;
@@ -248,6 +251,12 @@ body::before {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.08));
   color: var(--accent-storage);
   box-shadow: 0 2px 12px var(--accent-storage-glow);
+}
+
+.tab-btn.active[data-tab="display"] {
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.2), rgba(167, 139, 250, 0.08));
+  color: var(--accent-display);
+  box-shadow: 0 2px 12px var(--accent-display-glow);
 }
 
 .tab-icon {
