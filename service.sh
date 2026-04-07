@@ -52,6 +52,15 @@ json_str() {
     grep -o "\"$1\":\"[^\"]*\"" "$2" 2>/dev/null | head -1 | sed 's/.*:"\(.*\)"/\1/'
 }
 
+# Read int from nested JSON object: json_nested_int <parent> <key> <file>
+# e.g. {"mali_driver":{"cmar_optimize_for_latency":1}} → json_nested_int mali_driver cmar_optimize_for_latency file
+json_nested_int() {
+    local parent_block
+    parent_block=$(sed -n 's/.*"'"$1"'":{\([^}]*\)}.*/\1/p' "$3" 2>/dev/null | head -1)
+    [ -z "${parent_block}" ] && return
+    echo "${parent_block}" | grep -o "\"$2\":[0-9]*" | head -1 | grep -o '[0-9]*$'
+}
+
 # Extract JSON array of strings as space-separated values
 # e.g. "key":["a","b","c"] → "a b c"
 json_arr() {
@@ -315,6 +324,49 @@ apply_gpu_tuning() {
     if [ "${vk_render}" = "1" ] 2>/dev/null; then
         setprop debug.renderengine.backend skiavk 2>/dev/null
         logi "RenderEngine backend = skiavk"
+    fi
+
+    # Mali driver config via vendor.mali.platform.config (MALI_PLATFORM_CONFIG)
+    # Keys take effect at next GPU context creation (new app/activity launch).
+    local cfg_parts=""
+    local md_cmar=$(json_nested_int mali_driver cmar_optimize_for_latency "${CONF_GPU_TUNING}")
+    local md_lto=$(json_nested_int mali_driver gles_disable_shader_lto "${CONF_GPU_TUNING}")
+    local md_pilot=$(json_nested_int mali_driver gles_disable_pilot_shaders "${CONF_GPU_TUNING}")
+    local md_pcache=$(json_nested_int mali_driver gles_disable_graphics_pipeline_cache "${CONF_GPU_TUNING}")
+    local md_scache=$(json_nested_int mali_driver gles_disable_subpass_cache "${CONF_GPU_TUNING}")
+    local md_safbc=$(json_nested_int mali_driver gles_disable_surface_afbc "${CONF_GPU_TUNING}")
+    local md_tafbc=$(json_nested_int mali_driver gles_disable_texture_afbc "${CONF_GPU_TUNING}")
+    local md_crc=$(json_nested_int mali_driver gles_disable_crc "${CONF_GPU_TUNING}")
+    local md_idvs=$(json_nested_int mali_driver gles_disable_idvs "${CONF_GPU_TUNING}")
+    local md_sched=$(json_nested_int mali_driver sched_rt_thread_priority "${CONF_GPU_TUNING}")
+    local md_opt=$(json_nested_int mali_driver optimization_level "${CONF_GPU_TUNING}")
+    local md_prerot=$(json_nested_int mali_driver mali_prerotate "${CONF_GPU_TUNING}")
+
+    [ "${md_cmar}" = "1" ]   && cfg_parts="${cfg_parts:+${cfg_parts}:}CMAR_OPTIMIZE_FOR_LATENCY=1"
+    [ "${md_lto}" = "1" ]    && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_SHADER_LTO=1"
+    [ "${md_pilot}" = "1" ]  && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_PILOT_SHADERS=1"
+    [ "${md_pcache}" = "1" ] && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_GRAPHICS_PIPELINE_CACHE=1"
+    [ "${md_scache}" = "1" ] && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_SUBPASS_CACHE=1"
+    [ "${md_safbc}" = "1" ]  && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_SURFACE_AFBC=1"
+    [ "${md_tafbc}" = "1" ]  && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_TEXTURE_AFBC=1"
+    [ "${md_crc}" = "1" ]    && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_CRC=1"
+    [ "${md_idvs}" = "1" ]   && cfg_parts="${cfg_parts:+${cfg_parts}:}GLES_DISABLE_IDVS=1"
+    [ -n "${md_sched}" ] && [ "${md_sched}" -gt 0 ] 2>/dev/null && \
+        cfg_parts="${cfg_parts:+${cfg_parts}:}SCHED_RT_THREAD_PRIORITY=${md_sched}"
+    [ -n "${md_opt}" ] && [ "${md_opt}" -gt 0 ] 2>/dev/null && \
+        cfg_parts="${cfg_parts:+${cfg_parts}:}OPTIMIZATION_LEVEL=${md_opt}"
+
+    if [ -n "${cfg_parts}" ]; then
+        setprop vendor.mali.platform.config "${cfg_parts}" 2>/dev/null
+        logi "vendor.mali.platform.config = ${cfg_parts}"
+    else
+        setprop vendor.mali.platform.config "" 2>/dev/null
+    fi
+    if [ "${md_prerot}" = "1" ]; then
+        setprop vendor.mali.prerotate 1 2>/dev/null
+        logi "vendor.mali.prerotate = 1"
+    else
+        setprop vendor.mali.prerotate "" 2>/dev/null
     fi
 }
 apply_gpu_tuning

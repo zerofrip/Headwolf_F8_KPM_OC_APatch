@@ -127,6 +127,20 @@
       csgPeriod: 100,           // ms (stock: 100)
       vulkanHwui: 0,            // 0=off, 1=on
       vulkanRenderengine: 0,    // 0=off, 1=on
+      maliDriver: {             // MALI_PLATFORM_CONFIG / vendor.mali.* keys
+        cmarOptimizeForLatency: 0,  // bool: render manager latency opt
+        glesDisableShaderLto: 0,    // bool: disable shader LTO
+        glesDisablePilotShaders: 0, // bool: disable pilot shaders
+        glesDisableGraphicsPipelineCache: 0, // bool: disable pipeline cache
+        glesDisableSubpassCache: 0, // bool: disable subpass cache
+        schedRtThreadPriority: 0,   // int: RT thread priority (0=default)
+        optimizationLevel: 0,       // int: compiler opt level (0=default)
+        glesDisableSurfaceAfbc: 0,  // bool: disable surface AFBC
+        glesDisableTextureAfbc: 0,  // bool: disable texture AFBC
+        glesDisableCrc: 0,          // bool: disable CRC
+        glesDisableIdvs: 0,         // bool: disable IDVS
+        maliPrerotate: 0,           // bool: enable pre-rotation
+      },
       loaded: false,            // true after first read from device
     },
     profile: {
@@ -756,6 +770,18 @@
             </div>
           </div>
           ${numRow('gpu_tuning.csg_period', 'gpu_tuning.csg_period_hint', 'csgPeriod', gt.csgPeriod, STOCK.csgPeriod, 10, 200, 10)}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('gpu_tuning.mali_driver_section')}</h4>
+          ${toggleRow('gpu_tuning.cmar_latency', 'gpu_tuning.cmar_latency_hint', 'maliDriver.cmarOptimizeForLatency', gt.maliDriver.cmarOptimizeForLatency)}
+          ${toggleRow('gpu_tuning.disable_shader_lto', 'gpu_tuning.disable_shader_lto_hint', 'maliDriver.glesDisableShaderLto', gt.maliDriver.glesDisableShaderLto)}
+          ${toggleRow('gpu_tuning.disable_pilot_shaders', 'gpu_tuning.disable_pilot_shaders_hint', 'maliDriver.glesDisablePilotShaders', gt.maliDriver.glesDisablePilotShaders)}
+          ${toggleRow('gpu_tuning.disable_pipeline_cache', 'gpu_tuning.disable_pipeline_cache_hint', 'maliDriver.glesDisableGraphicsPipelineCache', gt.maliDriver.glesDisableGraphicsPipelineCache)}
+          ${toggleRow('gpu_tuning.disable_subpass_cache', 'gpu_tuning.disable_subpass_cache_hint', 'maliDriver.glesDisableSubpassCache', gt.maliDriver.glesDisableSubpassCache)}
+          ${toggleRow('gpu_tuning.disable_surface_afbc', 'gpu_tuning.disable_surface_afbc_hint', 'maliDriver.glesDisableSurfaceAfbc', gt.maliDriver.glesDisableSurfaceAfbc)}
+          ${toggleRow('gpu_tuning.disable_texture_afbc', 'gpu_tuning.disable_texture_afbc_hint', 'maliDriver.glesDisableTextureAfbc', gt.maliDriver.glesDisableTextureAfbc)}
+          ${toggleRow('gpu_tuning.disable_crc', 'gpu_tuning.disable_crc_hint', 'maliDriver.glesDisableCrc', gt.maliDriver.glesDisableCrc)}
+          ${toggleRow('gpu_tuning.disable_idvs', 'gpu_tuning.disable_idvs_hint', 'maliDriver.glesDisableIdvs', gt.maliDriver.glesDisableIdvs)}
+          ${toggleRow('gpu_tuning.prerotate', 'gpu_tuning.prerotate_hint', 'maliDriver.maliPrerotate', gt.maliDriver.maliPrerotate)}
           <div class="setting-divider"></div>
           <h4 class="setting-section-title">${t('gpu_tuning.vulkan_section')}</h4>
           ${toggleRow('gpu_tuning.vulkan_hwui', 'gpu_tuning.vulkan_hwui_hint', 'vulkanHwui', gt.vulkanHwui)}
@@ -1579,7 +1605,7 @@
     }
     if (csgRes.stdout.trim()) gt.csgPeriod = parseInt(csgRes.stdout.trim(), 10) || gt.csgPeriod;
 
-    /* Overlay saved config (used for vulkan toggles which aren't readable from sysfs) */
+    /* Overlay saved config (used for vulkan toggles & mali driver which aren't readable from sysfs) */
     const cfgRes = await exec(`cat ${CONF_GPU_TUNING} 2>/dev/null`);
     if (cfgRes.stdout.trim()) {
       try {
@@ -1591,6 +1617,21 @@
         if (cfg.mali_csg_scheduling_period > 0) gt.csgPeriod = cfg.mali_csg_scheduling_period;
         gt.vulkanHwui = cfg.vulkan_hwui || 0;
         gt.vulkanRenderengine = cfg.vulkan_renderengine || 0;
+        if (cfg.mali_driver) {
+          const md = cfg.mali_driver;
+          gt.maliDriver.cmarOptimizeForLatency = md.cmar_optimize_for_latency || 0;
+          gt.maliDriver.glesDisableShaderLto = md.gles_disable_shader_lto || 0;
+          gt.maliDriver.glesDisablePilotShaders = md.gles_disable_pilot_shaders || 0;
+          gt.maliDriver.glesDisableGraphicsPipelineCache = md.gles_disable_graphics_pipeline_cache || 0;
+          gt.maliDriver.glesDisableSubpassCache = md.gles_disable_subpass_cache || 0;
+          gt.maliDriver.schedRtThreadPriority = md.sched_rt_thread_priority || 0;
+          gt.maliDriver.optimizationLevel = md.optimization_level || 0;
+          gt.maliDriver.glesDisableSurfaceAfbc = md.gles_disable_surface_afbc || 0;
+          gt.maliDriver.glesDisableTextureAfbc = md.gles_disable_texture_afbc || 0;
+          gt.maliDriver.glesDisableCrc = md.gles_disable_crc || 0;
+          gt.maliDriver.glesDisableIdvs = md.gles_disable_idvs || 0;
+          gt.maliDriver.maliPrerotate = md.mali_prerotate || 0;
+        }
       } catch (e) { /* ignore parse errors */ }
     }
     gt.loaded = true;
@@ -1857,7 +1898,12 @@
 
   /* ─── GPU Tuning Setter ───────────────────────────────────────────── */
   function setGpuTuning(field, value) {
-    state.gpuTuning[field] = value;
+    if (field.startsWith('maliDriver.')) {
+      const subField = field.slice('maliDriver.'.length);
+      state.gpuTuning.maliDriver[subField] = value;
+    } else {
+      state.gpuTuning[field] = value;
+    }
     const el = document.getElementById('gpu-tuning-card');
     if (el) el.innerHTML = renderGpuTuningCard();
   }
@@ -2588,7 +2634,7 @@
     }
   }
 
-  /* ─── Apply GPU Tuning (Mali sysfs + Vulkan props) ─────────────────── */
+  /* ─── Apply GPU Tuning (Mali sysfs + driver config + Vulkan props) ── */
   async function applyGpuTuning() {
     const gt = state.gpuTuning;
     await exec(`echo ${gt.dvfsPeriod} > ${MALI_SYSFS}/dvfs_period 2>/dev/null`);
@@ -2596,6 +2642,29 @@
     await exec(`echo ${gt.shaderPwroff} > ${MALI_SYSFS}/mcu_shader_pwroff_timeout 2>/dev/null`);
     await exec(`echo ${gt.powerPolicy} > ${MALI_SYSFS}/power_policy 2>/dev/null`);
     await exec(`echo ${gt.csgPeriod} > ${MALI_SYSFS}/csg_scheduling_period 2>/dev/null`);
+
+    /* Mali driver config via MALI_PLATFORM_CONFIG system property */
+    const md = gt.maliDriver;
+    const cfgParts = [];
+    if (md.cmarOptimizeForLatency) cfgParts.push('CMAR_OPTIMIZE_FOR_LATENCY=1');
+    if (md.glesDisableShaderLto) cfgParts.push('GLES_DISABLE_SHADER_LTO=1');
+    if (md.glesDisablePilotShaders) cfgParts.push('GLES_DISABLE_PILOT_SHADERS=1');
+    if (md.glesDisableGraphicsPipelineCache) cfgParts.push('GLES_DISABLE_GRAPHICS_PIPELINE_CACHE=1');
+    if (md.glesDisableSubpassCache) cfgParts.push('GLES_DISABLE_SUBPASS_CACHE=1');
+    if (md.glesDisableSurfaceAfbc) cfgParts.push('GLES_DISABLE_SURFACE_AFBC=1');
+    if (md.glesDisableTextureAfbc) cfgParts.push('GLES_DISABLE_TEXTURE_AFBC=1');
+    if (md.glesDisableCrc) cfgParts.push('GLES_DISABLE_CRC=1');
+    if (md.glesDisableIdvs) cfgParts.push('GLES_DISABLE_IDVS=1');
+    if (md.schedRtThreadPriority > 0) cfgParts.push('SCHED_RT_THREAD_PRIORITY=' + md.schedRtThreadPriority);
+    if (md.optimizationLevel > 0) cfgParts.push('OPTIMIZATION_LEVEL=' + md.optimizationLevel);
+    const cfgStr = cfgParts.join(':');
+    await exec(`setprop vendor.mali.platform.config '${cfgStr}' 2>/dev/null`);
+    if (md.maliPrerotate) {
+      await exec(`setprop vendor.mali.prerotate 1 2>/dev/null`);
+    } else {
+      await exec(`setprop vendor.mali.prerotate '' 2>/dev/null`);
+    }
+
     if (gt.vulkanHwui) {
       await exec('resetprop ro.hwui.use_vulkan true 2>/dev/null || setprop ro.hwui.use_vulkan true 2>/dev/null');
     } else {
@@ -3186,6 +3255,7 @@
 
   async function saveGpuTuningConfig() {
     const gt = state.gpuTuning;
+    const md = gt.maliDriver;
     const obj = {
       mali_dvfs_period: gt.dvfsPeriod,
       mali_idle_hysteresis_time: gt.idleHysteresis,
@@ -3194,6 +3264,20 @@
       mali_csg_scheduling_period: gt.csgPeriod,
       vulkan_hwui: gt.vulkanHwui,
       vulkan_renderengine: gt.vulkanRenderengine,
+      mali_driver: {
+        cmar_optimize_for_latency: md.cmarOptimizeForLatency,
+        gles_disable_shader_lto: md.glesDisableShaderLto,
+        gles_disable_pilot_shaders: md.glesDisablePilotShaders,
+        gles_disable_graphics_pipeline_cache: md.glesDisableGraphicsPipelineCache,
+        gles_disable_subpass_cache: md.glesDisableSubpassCache,
+        sched_rt_thread_priority: md.schedRtThreadPriority,
+        optimization_level: md.optimizationLevel,
+        gles_disable_surface_afbc: md.glesDisableSurfaceAfbc,
+        gles_disable_texture_afbc: md.glesDisableTextureAfbc,
+        gles_disable_crc: md.glesDisableCrc,
+        gles_disable_idvs: md.glesDisableIdvs,
+        mali_prerotate: md.maliPrerotate,
+      },
     };
     await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_GPU_TUNING}`);
   }
