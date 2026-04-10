@@ -1305,4 +1305,7 @@ body::before {
   color: var(--text-secondary);
   margin: 0;
   letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
