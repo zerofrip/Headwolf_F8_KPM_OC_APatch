@@ -171,6 +171,9 @@
       'display.power_section': 'Power',
       'display.idle_time': 'Display Idle Time',
       'display.idle_time_hint': 'Time before display enters low-power idle mode (ms). Lower = faster idle',
+      'display.sensor_section': 'Sensor',
+      'display.proximity_screen': 'Proximity Screen Control',
+      'display.proximity_screen_hint': 'Turn screen off when proximity sensor detects "near" (0), turn on when "far" (5)',
 
       /* RAM */
       'ram.title': 'DRAM · {type}',
@@ -476,6 +479,9 @@
       'display.power_section': '電力',
       'display.idle_time': 'ディスプレイアイドル時間',
       'display.idle_time_hint': 'ディスプレイが低電力アイドルモードに入るまでの時間 (ms)。低い = 早期省電力',
+      'display.sensor_section': 'センサー',
+      'display.proximity_screen': '近接センサー画面制御',
+      'display.proximity_screen_hint': '近接センサーが「近い」(0)を検出すると画面OFF、「遠い」(5)で画面ON',
 
       /* RAM */
       'ram.title': 'DRAM · {type}',

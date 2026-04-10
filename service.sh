@@ -25,6 +25,7 @@ CONF_PROFILE="${CONF_DIR}/profile.json"
 CONF_GPU_TUNING="${CONF_DIR}/gpu_tuning.json"
 CONF_CPU_TUNING="${CONF_DIR}/cpu_tuning.json"
 CONF_DISPLAY="${CONF_DIR}/display_tuning.json"
+CONF_PROXIMITY="${CONF_DIR}/proximity.json"
 
 # Legacy single-file config (for migration)
 OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -136,6 +137,10 @@ if [ -f "${CONF_GPU_OC}" ]; then
     v=$(json_int gpu_oc_volt "${CONF_GPU_OC}");  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_volt=$v"
     v=$(json_int gpu_oc_vsram "${CONF_GPU_OC}"); [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_vsram=$v"
 fi
+if [ -f "${CONF_PROXIMITY}" ]; then
+    v=$(json_int proximity_screen_enabled "${CONF_PROXIMITY}")
+    [ "$v" = "1" ] && INSMOD_PARAMS="${INSMOD_PARAMS} prox_screen_enabled=1"
+fi
 logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
 
 # Load the compiled KPM module into the kernel
@@ -149,6 +154,8 @@ chmod 644 /sys/module/kpm_oc/parameters/opp_table 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/raw 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null
+chmod 644 /sys/module/kpm_oc/parameters/prox_screen_enabled 2>/dev/null
+chmod 444 /sys/module/kpm_oc/parameters/prox_screen_state 2>/dev/null
 
 # ─── Restore CPU scaling limits from config ──────────────────────────────
 if [ -f "${CONF_CPU_SCALING}" ]; then

@@ -18,6 +18,7 @@
   const CONF_GPU_TUNING = `${CONF_DIR}/gpu_tuning.json`;
   const CONF_CPU_TUNING = `${CONF_DIR}/cpu_tuning.json`;
   const CONF_DISPLAY = `${CONF_DIR}/display_tuning.json`;
+  const CONF_PROXIMITY = `${CONF_DIR}/proximity.json`;
   const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
   const CONF_DRAM = `${CONF_DIR}/dram.json`;
   const CONF_IO = `${CONF_DIR}/io.json`;
@@ -170,6 +171,7 @@
       hdrAdaptive: 1,           // 0=off, 1=on
       hfgLevel: 2,              // 0/1/2
       displayIdleTime: 33,      // ms
+      proximityScreen: 0,       // 0=off, 1=on
       loaded: false,
     },
     profile: {
@@ -1025,6 +1027,9 @@
           <div class="setting-divider"></div>
           <h4 class="setting-section-title">${t('display.power_section')}</h4>
           ${sliderRow('display.idle_time', 'display.idle_time_hint', 'displayIdleTime', dt.displayIdleTime, STOCK.displayIdleTime, 8, 100, 1, 'ms')}
+          <div class="setting-divider"></div>
+          <h4 class="setting-section-title">${t('display.sensor_section')}</h4>
+          ${toggleRow('display.proximity_screen', 'display.proximity_screen_hint', 'proximityScreen', dt.proximityScreen)}
         </div>
       </div>`;
   }
@@ -1984,6 +1989,14 @@
         if (cfg.hdr_adaptive != null) dt.hdrAdaptive = cfg.hdr_adaptive;
         if (cfg.hfg_level != null) dt.hfgLevel = cfg.hfg_level;
         if (cfg.display_idle_time != null) dt.displayIdleTime = cfg.display_idle_time;
+      } catch (e) { /* ignore */ }
+    }
+    /* Load proximity config */
+    const proxRes = await exec(`cat ${CONF_PROXIMITY} 2>/dev/null`);
+    if (proxRes.stdout.trim()) {
+      try {
+        const pcfg = JSON.parse(proxRes.stdout.trim());
+        if (pcfg.proximity_screen_enabled != null) dt.proximityScreen = pcfg.proximity_screen_enabled;
       } catch (e) { /* ignore */ }
     }
     /* Derive mode from peak/min if not explicitly saved */
@@ -3133,8 +3146,10 @@
   async function applyDisplay() {
     showToast(t('toast.applying'), 'info');
     await applyDisplayTuning();
+    await applyProximityScreen();
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveDisplayTuningConfig();
+    await saveProximityConfig();
     await _loadDisplayTuningSection();
     renderAll();
     showToast(t('toast.saved'), 'success');
@@ -3741,6 +3756,16 @@
     await exec(`resetprop persist.vendor.sys.pq.hdr10p.adaptive.en ${dt.hdrAdaptive} 2>/dev/null`);
     await exec(`resetprop persist.vendor.sys.pq.hfg.en ${dt.hfgLevel} 2>/dev/null`);
     await exec(`echo ${dt.displayIdleTime} > /proc/displowpower/idletime 2>/dev/null`);
+  }
+
+  async function applyProximityScreen() {
+    const val = state.displayTuning.proximityScreen ? 'Y' : 'N';
+    await exec(`echo ${val} > /sys/module/kpm_oc/parameters/prox_screen_enabled 2>/dev/null`);
+  }
+
+  async function saveProximityConfig() {
+    const obj = { proximity_screen_enabled: state.displayTuning.proximityScreen };
+    await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_PROXIMITY}`);
   }
 
   async function saveDisplayTuningConfig() {
