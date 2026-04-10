@@ -171,9 +171,6 @@
       'display.power_section': 'Power',
       'display.idle_time': 'Display Idle Time',
       'display.idle_time_hint': 'Time before display enters low-power idle mode (ms). Lower = faster idle',
-      'display.sensor_section': 'Sensor',
-      'display.proximity_screen': 'Proximity Screen Control',
-      'display.proximity_screen_hint': 'Turn screen off when proximity sensor detects "near" (0), turn on when "far" (5)',
 
       /* RAM */
       'ram.title': 'DRAM · {type}',
@@ -273,13 +270,21 @@
       'thermal.gpu_pin_released': 'GPU pin released',
 
       /* Profile */
-      'profile.power_mode': 'Power Mode',
-      'profile.mode_warning': '⚠ Switching mode updates CPU scaling limits, DRAM floor, and thermal settings. Tap <strong>Apply Changes</strong> to activate.',
+      'profile.governor': 'CPU Governor',
+      'profile.governor_hint': '⚠ Switching governor updates CPU scaling policy and restores per-governor OC / scaling / thermal settings. Tap <strong>Apply Changes</strong> to activate.',
+      'profile.oc_section': 'OC & Scaling',
+      'profile.oc_freq': 'OC Freq (KHz)',
+      'profile.oc_volt': 'Voltage (µV)',
+      'profile.scaling_max': 'Scale Max (KHz)',
+      'profile.scaling_min': 'Scale Min (KHz)',
+      'profile.dram_min': 'DRAM Min (Hz)',
+      'profile.cpu_thermal': 'CPU Thermal',
+      'profile.gpu_thermal': 'GPU Thermal',
       'profile.auto_gaming': 'Auto Gaming Mode',
       'profile.gaming_boost_active': '🎮 Gaming boost active: {app}',
       'profile.monitoring': '👁 Monitoring foreground app...',
       'profile.gaming_idle': '⏸ Auto Gaming enabled — starts on Apply',
-      'profile.gaming_desc': 'Selected apps automatically trigger Performance OC when in foreground. Works across all power modes. A background daemon keeps monitoring after WebUI closes.',
+      'profile.gaming_desc': 'Selected apps automatically trigger Performance governor + max OC when in foreground. A background daemon keeps monitoring after WebUI closes.',
       'profile.gaming_apps': 'Gaming Apps ({n})',
       'profile.no_apps_selected': 'No apps selected',
       'profile.installed_apps': 'Installed Apps',
@@ -287,14 +292,6 @@
       'profile.loading_apps': 'Loading installed apps...',
       'profile.no_apps_found': 'No apps found',
       'profile.apps_count': '{total} apps · {selected} selected',
-
-      /* Power presets */
-      'preset.battery_save': 'Battery Save',
-      'preset.battery_desc': 'Reduced clocks · max battery life',
-      'preset.normal': 'Normal',
-      'preset.normal_desc': 'OC as configured · balanced',
-      'preset.performance': 'Performance',
-      'preset.performance_desc': 'Max OC · thermal mitigation · DRAM max',
 
       /* Toast / status messages */
       'toast.applying': 'Applying changes...',
@@ -479,9 +476,6 @@
       'display.power_section': '電力',
       'display.idle_time': 'ディスプレイアイドル時間',
       'display.idle_time_hint': 'ディスプレイが低電力アイドルモードに入るまでの時間 (ms)。低い = 早期省電力',
-      'display.sensor_section': 'センサー',
-      'display.proximity_screen': '近接センサー画面制御',
-      'display.proximity_screen_hint': '近接センサーが「近い」(0)を検出すると画面OFF、「遠い」(5)で画面ON',
 
       /* RAM */
       'ram.title': 'DRAM · {type}',
@@ -581,13 +575,21 @@
       'thermal.gpu_pin_released': 'GPU固定解除',
 
       /* Profile */
-      'profile.power_mode': '電力モード',
-      'profile.mode_warning': '⚠ モード切替によりCPUスケーリング制限、DRAMフロア、温度設定が更新されます。<strong>設定を適用</strong>をタップして有効にしてください。',
+      'profile.governor': 'CPUガバナー',
+      'profile.governor_hint': '⚠ ガバナーを切り替えるとCPUスケーリングポリシーが変更され、ガバナーごとのOC・スケーリング・温度設定が復元されます。<strong>設定を適用</strong>をタップして有効にしてください。',
+      'profile.oc_section': 'OC & スケーリング',
+      'profile.oc_freq': 'OC周波数 (KHz)',
+      'profile.oc_volt': '電圧 (µV)',
+      'profile.scaling_max': '最大周波数 (KHz)',
+      'profile.scaling_min': '最小周波数 (KHz)',
+      'profile.dram_min': 'DRAM最小 (Hz)',
+      'profile.cpu_thermal': 'CPUサーマル',
+      'profile.gpu_thermal': 'GPUサーマル',
       'profile.auto_gaming': 'オートゲーミングモード',
       'profile.gaming_boost_active': '🎮 ゲーミングブースト作動中: {app}',
       'profile.monitoring': '👁 フォアグラウンドアプリを監視中...',
       'profile.gaming_idle': '⏸ オートゲーミング有効 — 適用で開始',
-      'profile.gaming_desc': '選択したアプリがフォアグラウンドの時、自動的にパフォーマンスOCが適用されます。全電力モードで動作します。WebUI終了後もバックグラウンドデーモンが監視を続けます。',
+      'profile.gaming_desc': '選択したアプリがフォアグラウンドの時、自動的にperformanceガバナー+最大OCが適用されます。WebUI終了後もバックグラウンドデーモンが監視を続けます。',
       'profile.gaming_apps': 'ゲーミングアプリ ({n})',
       'profile.no_apps_selected': 'アプリ未選択',
       'profile.installed_apps': 'インストール済みアプリ',
@@ -595,14 +597,6 @@
       'profile.loading_apps': 'インストール済みアプリを読み込み中...',
       'profile.no_apps_found': 'アプリが見つかりません',
       'profile.apps_count': '{total} アプリ · {selected} 選択中',
-
-      /* Power presets */
-      'preset.battery_save': 'バッテリーセーブ',
-      'preset.battery_desc': 'クロック低減 · バッテリー寿命最大',
-      'preset.normal': 'ノーマル',
-      'preset.normal_desc': '設定通りのOC · バランス型',
-      'preset.performance': 'パフォーマンス',
-      'preset.performance_desc': '最大OC · 温度制御 · DRAM最大',
 
       /* Toast / status messages */
       'toast.applying': '設定を適用中...',

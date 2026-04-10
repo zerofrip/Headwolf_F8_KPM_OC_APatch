@@ -6,4 +6,5 @@
 *.swp
 *~
 .vscode/
-kpm_oc.ko
+.class
+.dex

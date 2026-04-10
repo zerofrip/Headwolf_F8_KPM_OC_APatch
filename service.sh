@@ -25,7 +25,6 @@ CONF_PROFILE="${CONF_DIR}/profile.json"
 CONF_GPU_TUNING="${CONF_DIR}/gpu_tuning.json"
 CONF_CPU_TUNING="${CONF_DIR}/cpu_tuning.json"
 CONF_DISPLAY="${CONF_DIR}/display_tuning.json"
-CONF_PROXIMITY="${CONF_DIR}/proximity.json"
 
 # Legacy single-file config (for migration)
 OLD_CONFIG_FILE="${CONFIG_DIR}/oc_config.json"
@@ -97,8 +96,14 @@ migrate_legacy_config() {
     printf '{"ufs_wb_on":%s,"ufs_clkgate_enable":%s,"ufs_clkgate_delay_ms":%s,"ufs_auto_hibern8":%s,"ufs_rpm_lvl":%s,"ufs_spm_lvl":%s}\n' \
         "$(_oi ufs_wb_on)" "$(_oi ufs_clkgate_enable)" "$(_oi ufs_clkgate_delay_ms)" "$(_oi ufs_auto_hibern8)" "$(_oi ufs_rpm_lvl)" "$(_oi ufs_spm_lvl)" > "${CONF_UFS}"
     printf '{"cpu_thermal_mode":%s,"gpu_thermal_mode":%s}\n' "$(_oi cpu_thermal_mode)" "$(_oi gpu_thermal_mode)" > "${CONF_THERMAL}"
-    printf '{"power_mode":%s,"auto_gaming":%s,"gaming_apps":"%s"}\n' \
-        "$(_oi power_mode)" "$(_oi auto_gaming)" "$(_os gaming_apps)" > "${CONF_PROFILE}"
+    local _pm; _pm=$(_oi power_mode)
+    local _gov="schedutil"
+    case "${_pm}" in
+        0) _gov="powersave" ;;
+        2) _gov="performance" ;;
+    esac
+    printf '{"governor":"%s","auto_gaming":%s,"gaming_apps":"%s","profiles":{}}\n' \
+        "${_gov}" "$(_oi auto_gaming)" "$(_os gaming_apps)" > "${CONF_PROFILE}"
 
     mv "${OLD_CONFIG_FILE}" "${OLD_CONFIG_FILE}.bak.v9"
     logi "Migration complete. Old config backed up."
@@ -137,10 +142,6 @@ if [ -f "${CONF_GPU_OC}" ]; then
     v=$(json_int gpu_oc_volt "${CONF_GPU_OC}");  [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_volt=$v"
     v=$(json_int gpu_oc_vsram "${CONF_GPU_OC}"); [ -n "$v" ] && [ "$v" != "0" ] && INSMOD_PARAMS="${INSMOD_PARAMS} gpu_target_vsram=$v"
 fi
-if [ -f "${CONF_PROXIMITY}" ]; then
-    v=$(json_int proximity_screen_enabled "${CONF_PROXIMITY}")
-    [ "$v" = "1" ] && INSMOD_PARAMS="${INSMOD_PARAMS} prox_screen_enabled=1"
-fi
 logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
 
 # Load the compiled KPM module into the kernel
@@ -154,9 +155,6 @@ chmod 644 /sys/module/kpm_oc/parameters/opp_table 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/raw 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null
-chmod 644 /sys/module/kpm_oc/parameters/prox_screen_enabled 2>/dev/null
-chmod 444 /sys/module/kpm_oc/parameters/prox_screen_state 2>/dev/null
-
 # ─── Restore CPU scaling limits from config ──────────────────────────────
 if [ -f "${CONF_CPU_SCALING}" ]; then
     for policy in 0 4 7; do
@@ -170,6 +168,17 @@ if [ -f "${CONF_CPU_SCALING}" ]; then
         fi
     done
     logi "CPU scaling limits restored from config"
+fi
+
+# ─── Restore CPU Scaling Governor from profile config ─────────────────────
+if [ -f "${CONF_PROFILE}" ]; then
+    gov=$(json_str "governor" "${CONF_PROFILE}")
+    if [ -n "${gov}" ]; then
+        for policy in 0 4 7; do
+            echo "${gov}" > /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_governor 2>/dev/null
+        done
+        logi "CPU governor set to ${gov}"
+    fi
 fi
 
     # CPU OC relift pass: vendor constraints can race and clamp first write.
@@ -567,7 +576,10 @@ while true; do
     IFS=$OIFS
 
     if [ "$IS_GAMING" = "1" ] && [ "$BOOSTED" = "0" ]; then
-        # Apply Performance preset
+        # Apply Performance preset: switch to performance governor
+        for p in 0 4 7; do
+            echo performance > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_governor" 2>/dev/null
+        done
         echo 3800000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null
         echo 3800000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null
         echo 4000000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null
@@ -584,29 +596,23 @@ while true; do
         log -t "KPM_OC" "Gaming boost ON: $FG"
         BOOSTED=1
     elif [ "$IS_GAMING" = "0" ] && [ "$BOOSTED" = "1" ]; then
-        # Revert to saved power mode
-        pm=$(_ji power_mode "$CONF/profile.json")
-        pm=${pm:-1}
+        # Revert to saved governor profile
+        gov=$(_js governor "$CONF/profile.json")
+        gov=${gov:-schedutil}
+        for p in 0 4 7; do
+            echo "$gov" > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_governor" 2>/dev/null
+        done
         # Restore GPU power_policy from gpu_tuning config (default: coarse_demand)
         GP=$(_js mali_power_policy "$CONF/gpu_tuning.json")
         echo "${GP:-coarse_demand}" > /sys/devices/platform/soc/13000000.mali/power_policy 2>/dev/null
-        case $pm in
-            0) # Battery Save
-                echo 1600000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null
-                echo 2000000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null
-                echo 2000000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null
-                echo 800000000 > "${DRAM_DF}/min_freq" 2>/dev/null
-                ;;
-            *) # Normal or Performance — use config values
-                for p in 0 4 7; do
-                    mv=$(_ji "cpu_max_${p}" "$CONF/cpu_scaling.json")
-                    [ -n "$mv" ] && echo "$mv" > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_max_freq" 2>/dev/null
-                done
-                dm=$(_ji dram_min_freq "$CONF/dram.json")
-                [ -n "$dm" ] && echo "$dm" > "${DRAM_DF}/min_freq" 2>/dev/null
-                ;;
-        esac
-        log -t "KPM_OC" "Gaming boost OFF: reverted to mode=$pm"
+        # Restore scaling limits from saved config
+        for p in 0 4 7; do
+            mv=$(_ji "cpu_max_${p}" "$CONF/cpu_scaling.json")
+            [ -n "$mv" ] && echo "$mv" > "/sys/devices/system/cpu/cpufreq/policy${p}/scaling_max_freq" 2>/dev/null
+        done
+        dm=$(_ji dram_min_freq "$CONF/dram.json")
+        [ -n "$dm" ] && echo "$dm" > "${DRAM_DF}/min_freq" 2>/dev/null
+        log -t "KPM_OC" "Gaming boost OFF: reverted to governor=$gov"
         BOOSTED=0
     fi
     sleep 5

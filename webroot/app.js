@@ -18,7 +18,6 @@
   const CONF_GPU_TUNING = `${CONF_DIR}/gpu_tuning.json`;
   const CONF_CPU_TUNING = `${CONF_DIR}/cpu_tuning.json`;
   const CONF_DISPLAY = `${CONF_DIR}/display_tuning.json`;
-  const CONF_PROXIMITY = `${CONF_DIR}/proximity.json`;
   const CONF_CPU_SCALING = `${CONF_DIR}/cpu_scaling.json`;
   const CONF_DRAM = `${CONF_DIR}/dram.json`;
   const CONF_IO = `${CONF_DIR}/io.json`;
@@ -56,26 +55,22 @@
   /* i18n shorthand */
   const t = window.I18n.t;
 
-  const POWER_PRESETS = [
-    {
-      labelKey: 'preset.battery_save', descKey: 'preset.battery_desc', icon: '🔋',
-      cpuMax: { 0: 1600000, 4: 2000000, 7: 2000000 },
-      dramMin: 800000000,
-      cpuThermal: 0, gpuThermal: 0,
-    },
-    {
-      labelKey: 'preset.normal', descKey: 'preset.normal_desc', icon: '⚡',
-      cpuMax: null,  // null = use saved config values
-      dramMin: null,
-      cpuThermal: 0, gpuThermal: 0,
-    },
-    {
-      labelKey: 'preset.performance', descKey: 'preset.performance_desc', icon: '🚀set.performance_desc', icon: '🚀',
-      cpuMax: { 0: 3800000, 4: 3800000, 7: 4000000 },
-      dramMin: 6400000000,
-      cpuThermal: 1, gpuThermal: 1,
-    },
-  ];
+  const POWER_PRESETS = []; // legacy — kept for compat; governor-based profiles replace these
+
+  const GOVERNOR_ICONS = {
+    schedutil: '⚡', performance: '🚀', powersave: '🔋', ondemand: '📊',
+    conservative: '🛡️', userspace: '🎛️',
+  };
+  const GOVERNOR_DEFAULT_PROFILE = {
+    cpu_oc_l_freq: 3800000, cpu_oc_l_volt: 1050000,
+    cpu_oc_b_freq: 3800000, cpu_oc_b_volt: 1100000,
+    cpu_oc_p_freq: 4000000, cpu_oc_p_volt: 1150000,
+    cpu_max_0: 3800000, cpu_min_0: 480000,
+    cpu_max_4: 3800000, cpu_min_4: 400000,
+    cpu_max_7: 4000000, cpu_min_7: 400000,
+    dram_min: 0,
+    cpu_thermal: 0, gpu_thermal: 0,
+  };
 
   /* ─── State ───────────────────────────────────────────────────────── */
   const state = {
@@ -171,11 +166,12 @@
       hdrAdaptive: 1,           // 0=off, 1=on
       hfgLevel: 2,              // 0/1/2
       displayIdleTime: 33,      // ms
-      proximityScreen: 0,       // 0=off, 1=on
       loaded: false,
     },
     profile: {
-      powerMode: 1,     // 0=battery, 1=normal, 2=performance
+      governor: 'schedutil',
+      availableGovernors: [],
+      governorProfiles: {},   // { "schedutil": {...}, "performance": {...} }
       autoGaming: {
         enabled: false,
         apps: [],         // selected gaming app package names
@@ -1027,9 +1023,6 @@
           <div class="setting-divider"></div>
           <h4 class="setting-section-title">${t('display.power_section')}</h4>
           ${sliderRow('display.idle_time', 'display.idle_time_hint', 'displayIdleTime', dt.displayIdleTime, STOCK.displayIdleTime, 8, 100, 1, 'ms')}
-          <div class="setting-divider"></div>
-          <h4 class="setting-section-title">${t('display.sensor_section')}</h4>
-          ${toggleRow('display.proximity_screen', 'display.proximity_screen_hint', 'proximityScreen', dt.proximityScreen)}
         </div>
       </div>`;
   }
@@ -1420,19 +1413,74 @@
 
   /* ─── Render Profile Content ───────────────────────────────────────── */
   function renderProfileContent() {
-    const pm = state.profile.powerMode;
+    const gov = state.profile.governor;
     const ag = state.profile.autoGaming;
+    const govs = state.profile.availableGovernors;
+    const gp = state.profile.governorProfiles[gov] || GOVERNOR_DEFAULT_PROFILE;
 
-    let modeCards = '';
-    POWER_PRESETS.forEach((preset, idx) => {
-      modeCards += `
-        <div class="power-mode-card ${pm === idx ? 'active' : ''}"
-             onclick="window.OC.setPowerMode(${idx})">
-          <span class="pm-icon">${preset.icon}</span>
-          <span class="pm-label">${t(preset.labelKey)}</span>
-          <span class="pm-desc">${t(preset.descKey)}</span>
+    /* Governor selector cards */
+    let govCards = '';
+    govs.forEach(g => {
+      const icon = GOVERNOR_ICONS[g] || '⚙️';
+      govCards += `
+        <div class="power-mode-card ${gov === g ? 'active' : ''}"
+             onclick="window.OC.setGovernor('${g}')">
+          <span class="pm-icon">${icon}</span>
+          <span class="pm-label">${g}</span>
         </div>`;
     });
+
+    /* OC summary rows */
+    const clusterLabels = { l: 'LITTLE', b: 'big', p: 'PRIME' };
+    const clusterPolicies = { l: 0, b: 4, p: 7 };
+    let ocRows = '';
+    for (const [key, label] of Object.entries(clusterLabels)) {
+      const freq = gp[`cpu_oc_${key}_freq`] || 0;
+      const volt = gp[`cpu_oc_${key}_volt`] || 0;
+      const pid = clusterPolicies[key];
+      const maxF = gp[`cpu_max_${pid}`] || 0;
+      const minF = gp[`cpu_min_${pid}`] || 0;
+      ocRows += `
+        <div class="setting-row" style="padding:0 4px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+            <span style="font-weight:600;font-size:0.82rem;color:var(--text-primary)">${label} (P${pid})</span>
+            <span class="info-chip freq">${freq > 0 ? formatFreqKHz(freq) : 'Stock'}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
+            <div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.oc_freq')}</div>
+              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
+                value="${freq > 0 ? freq : ''}" placeholder="KHz"
+                onchange="window.OC.setGovProfile('cpu_oc_${key}_freq', parseInt(this.value)||0)">
+            </div>
+            <div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.oc_volt')}</div>
+              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
+                value="${volt > 0 ? volt : ''}" placeholder="µV"
+                onchange="window.OC.setGovProfile('cpu_oc_${key}_volt', parseInt(this.value)||0)">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.scaling_max')}</div>
+              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
+                value="${maxF}" placeholder="KHz"
+                onchange="window.OC.setGovProfile('cpu_max_${pid}', parseInt(this.value)||0)">
+            </div>
+            <div>
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.scaling_min')}</div>
+              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
+                value="${minF}" placeholder="KHz"
+                onchange="window.OC.setGovProfile('cpu_min_${pid}', parseInt(this.value)||0)">
+            </div>
+          </div>
+        </div>`;
+    }
+
+    /* DRAM & Thermal row */
+    const dramMin = gp.dram_min || 0;
+    const cpuTh = gp.cpu_thermal || 0;
+    const gpuTh = gp.gpu_thermal || 0;
 
     // Gaming status
     let statusHtml = '';
@@ -1463,16 +1511,57 @@
       <div class="card">
         <div class="card-header">
           <div class="card-title">
-            <span class="icon">\ud83c\udfaf</span>
-            ${t('profile.power_mode')}
+            <span class="icon">⚡</span>
+            ${t('profile.governor')}
           </div>
-          <span class="card-badge cpu">${t(POWER_PRESETS[pm].labelKey)}</span>
+          <span class="card-badge cpu">${gov}</span>
         </div>
         <div class="power-mode-grid">
-          ${modeCards}
+          ${govCards}
         </div>
         <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
-          ${t('profile.mode_warning')}
+          ${t('profile.governor_hint')}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🔧</span>
+            ${t('profile.oc_section')} — ${gov}
+          </div>
+        </div>
+        <div class="settings-list" style="gap:14px">
+          ${ocRows}
+          <div class="setting-divider"></div>
+          <div class="setting-row" style="padding:0 4px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+              <div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.dram_min')}</div>
+                <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
+                  value="${dramMin}" placeholder="Hz"
+                  onchange="window.OC.setGovProfile('dram_min', parseInt(this.value)||0)">
+              </div>
+              <div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.cpu_thermal')}</div>
+                <select class="config-input" style="width:100%;font-size:0.8rem"
+                  onchange="window.OC.setGovProfile('cpu_thermal', parseInt(this.value))">
+                  <option value="0" ${cpuTh===0?'selected':''}>${t('thermal.off')}</option>
+                  <option value="1" ${cpuTh===1?'selected':''}>${t('thermal.soft')}</option>
+                  <option value="2" ${cpuTh===2?'selected':''}>${t('thermal.hard')}</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.gpu_thermal')}</div>
+                <select class="config-input" style="width:100%;font-size:0.8rem"
+                  onchange="window.OC.setGovProfile('gpu_thermal', parseInt(this.value))">
+                  <option value="0" ${gpuTh===0?'selected':''}>${t('thermal.off')}</option>
+                  <option value="1" ${gpuTh===1?'selected':''}>${t('thermal.soft')}</option>
+                  <option value="2" ${gpuTh===2?'selected':''}>${t('thermal.hard')}</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1991,14 +2080,6 @@
         if (cfg.display_idle_time != null) dt.displayIdleTime = cfg.display_idle_time;
       } catch (e) { /* ignore */ }
     }
-    /* Load proximity config */
-    const proxRes = await exec(`cat ${CONF_PROXIMITY} 2>/dev/null`);
-    if (proxRes.stdout.trim()) {
-      try {
-        const pcfg = JSON.parse(proxRes.stdout.trim());
-        if (pcfg.proximity_screen_enabled != null) dt.proximityScreen = pcfg.proximity_screen_enabled;
-      } catch (e) { /* ignore */ }
-    }
     /* Derive mode from peak/min if not explicitly saved */
     if (!dt.refreshMode || (dt.refreshMode !== 'fixed' && dt.refreshMode !== 'adaptive')) {
       dt.refreshMode = (dt.peakRefreshRate === dt.minRefreshRate) ? 'fixed' : 'adaptive';
@@ -2049,14 +2130,65 @@
   }
 
   async function _loadProfileSection() {
+    /* Read available governors from sysfs */
+    const govListRes = await exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null');
+    if (govListRes.stdout.trim()) {
+      state.profile.availableGovernors = govListRes.stdout.trim().split(/\s+/);
+    }
+    /* Read current governor */
+    const govCurRes = await exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null');
+    if (govCurRes.stdout.trim()) {
+      state.profile.governor = govCurRes.stdout.trim();
+    }
+
     const profileCfgRes = await exec(`cat ${CONF_PROFILE} 2>/dev/null`);
     if (profileCfgRes.stdout) {
-      const pmM = profileCfgRes.stdout.match(/"power_mode"\s*:\s*(\d+)/);
-      const agM = profileCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
-      const gaM = profileCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
-      if (pmM) state.profile.powerMode = parseInt(pmM[1], 10);
-      if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
-      if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(function(s) { return s.trim(); });
+      try {
+        const cfg = JSON.parse(profileCfgRes.stdout.trim());
+        if (cfg.governor) state.profile.governor = cfg.governor;
+        if (cfg.profiles && typeof cfg.profiles === 'object') {
+          state.profile.governorProfiles = cfg.profiles;
+        }
+        if (cfg.auto_gaming !== undefined) {
+          state.profile.autoGaming.enabled = cfg.auto_gaming === 1;
+        }
+        if (cfg.gaming_apps && typeof cfg.gaming_apps === 'string') {
+          state.profile.autoGaming.apps = cfg.gaming_apps.split(',').filter(s => s.trim());
+        }
+      } catch (e) {
+        /* Legacy format fallback */
+        const agM = profileCfgRes.stdout.match(/"auto_gaming"\s*:\s*(\d+)/);
+        const gaM = profileCfgRes.stdout.match(/"gaming_apps"\s*:\s*"([^"]*)"/);
+        if (agM) state.profile.autoGaming.enabled = parseInt(agM[1], 10) === 1;
+        if (gaM && gaM[1]) state.profile.autoGaming.apps = gaM[1].split(',').filter(s => s.trim());
+      }
+    }
+
+    /* Ensure current governor has a profile entry */
+    if (!state.profile.governorProfiles[state.profile.governor]) {
+      state.profile.governorProfiles[state.profile.governor] = { ...GOVERNOR_DEFAULT_PROFILE };
+      /* Populate from current cpu_oc / cpu_scaling configs if available */
+      const ocRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
+      if (ocRes.stdout.trim()) {
+        try {
+          const oc = JSON.parse(ocRes.stdout.trim());
+          const gp = state.profile.governorProfiles[state.profile.governor];
+          for (const k of ['cpu_oc_l_freq','cpu_oc_l_volt','cpu_oc_b_freq','cpu_oc_b_volt','cpu_oc_p_freq','cpu_oc_p_volt']) {
+            if (oc[k]) gp[k] = oc[k];
+          }
+        } catch (e) { /* ignore */ }
+      }
+      const scRes = await exec(`cat ${CONF_CPU_SCALING} 2>/dev/null`);
+      if (scRes.stdout.trim()) {
+        try {
+          const sc = JSON.parse(scRes.stdout.trim());
+          const gp = state.profile.governorProfiles[state.profile.governor];
+          for (const p of [0, 4, 7]) {
+            if (sc[`cpu_max_${p}`]) gp[`cpu_max_${p}`] = sc[`cpu_max_${p}`];
+            if (sc[`cpu_min_${p}`]) gp[`cpu_min_${p}`] = sc[`cpu_min_${p}`];
+          }
+        } catch (e) { /* ignore */ }
+      }
     }
   }
 
@@ -2374,48 +2506,57 @@
     if (gpuEl) gpuEl.innerHTML = renderThermalCard('gpu');
   }
 
-  /* ─── Power Mode ────────────────────────────────────────────────────── */
-  function setPowerMode(mode) {
-    state.profile.powerMode = mode;
-    const preset = POWER_PRESETS[mode];
-
-    // Update UI state to reflect preset
-    if (preset.cpuMax) {
-      for (const cluster of state.cpuClusters) {
-        if (preset.cpuMax[cluster.id] !== undefined) {
-          cluster.curMax = preset.cpuMax[cluster.id];
-        }
-      }
+  /* ─── Governor Selection ─────────────────────────────────────────────── */
+  function setGovernor(gov) {
+    /* Save current governor's in-memory profile before switching */
+    state.profile.governor = gov;
+    /* Ensure the selected governor has a profile */
+    if (!state.profile.governorProfiles[gov]) {
+      state.profile.governorProfiles[gov] = { ...GOVERNOR_DEFAULT_PROFILE };
     }
-    if (preset.dramMin !== null) {
-      state.ram.selectedMinFreq = preset.dramMin;
-    }
-    state.thermal.cpuMode = preset.cpuThermal;
-    state.thermal.gpuMode = preset.gpuThermal;
-
     renderAll();
+  }
+
+  function setGovProfile(key, value) {
+    const gov = state.profile.governor;
+    if (!state.profile.governorProfiles[gov]) {
+      state.profile.governorProfiles[gov] = { ...GOVERNOR_DEFAULT_PROFILE };
+    }
+    state.profile.governorProfiles[gov][key] = value;
   }
 
   /** Quick hardware apply for gaming boost/un-boost (bypasses full applyAll flow) */
   async function applyPowerModeQuick(mode) {
-    const preset = POWER_PRESETS[mode];
-    if (!preset) return;
-
-    if (preset.cpuMax) {
-      for (const policy of Object.keys(preset.cpuMax)) {
-        await exec('echo ' + preset.cpuMax[policy] + ' > /sys/devices/system/cpu/cpufreq/policy' + policy + '/scaling_max_freq 2>/dev/null');
+    if (mode === 'performance') {
+      /* Gaming boost ON: performance governor + max freq */
+      for (const p of [0, 4, 7]) {
+        await exec('echo performance > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_governor 2>/dev/null');
       }
-    }
-    if (preset.dramMin !== null) {
-      await exec('echo ' + preset.dramMin + ' > ' + DRAM_DEVFREQ + '/min_freq 2>/dev/null');
-    }
-    state.thermal.cpuMode = preset.cpuThermal;
-    state.thermal.gpuMode = preset.gpuThermal;
-    await applyThermal();
-
-    if (mode === 2) {
+      await exec('echo 3800000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 2>/dev/null');
+      await exec('echo 3800000 > /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null');
+      await exec('echo 4000000 > /sys/devices/system/cpu/cpufreq/policy7/scaling_max_freq 2>/dev/null');
+      await exec('echo 6400000000 > ' + DRAM_DEVFREQ + '/min_freq 2>/dev/null');
+      state.thermal.cpuMode = 1;
+      state.thermal.gpuMode = 1;
+      await applyThermal();
       await exec('echo 1 > ' + KS_PARAMS + 'cpu_oc_apply 2>/dev/null');
       await exec('echo 1 > ' + KS_PARAMS + 'gpu_oc_apply 2>/dev/null');
+    } else {
+      /* Revert to saved governor + profile settings */
+      const gov = state.profile.governor;
+      const gp = state.profile.governorProfiles[gov] || GOVERNOR_DEFAULT_PROFILE;
+      for (const p of [0, 4, 7]) {
+        await exec('echo ' + gov + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_governor 2>/dev/null');
+        if (gp[`cpu_max_${p}`] > 0) {
+          await exec('echo ' + gp[`cpu_max_${p}`] + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_max_freq 2>/dev/null');
+        }
+      }
+      if (gp.dram_min > 0) {
+        await exec('echo ' + gp.dram_min + ' > ' + DRAM_DEVFREQ + '/min_freq 2>/dev/null');
+      }
+      state.thermal.cpuMode = gp.cpu_thermal || 0;
+      state.thermal.gpuMode = gp.gpu_thermal || 0;
+      await applyThermal();
     }
   }
 
@@ -2583,7 +2724,7 @@
     }
     if (ag.boosted) {
       ag.boosted = false;
-      applyPowerModeQuick(state.profile.powerMode);
+      applyPowerModeQuick('revert');
     }
     const el = document.getElementById('profile-content');
     if (el) el.innerHTML = renderProfileContent();
@@ -2606,13 +2747,13 @@
     if (isGaming && !ag.boosted) {
       ag.boosted = true;
       showToast(t('toast.gaming_boost_on', { app: fgPkg }), 'success');
-      await applyPowerModeQuick(2);
+      await applyPowerModeQuick('performance');
       const el = document.getElementById('profile-content');
       if (el) el.innerHTML = renderProfileContent();
     } else if (!isGaming && ag.boosted) {
       ag.boosted = false;
       showToast(t('toast.gaming_boost_off'), 'info');
-      await applyPowerModeQuick(state.profile.powerMode);
+      await applyPowerModeQuick('revert');
       const el = document.getElementById('profile-content');
       if (el) el.innerHTML = renderProfileContent();
     }
@@ -3146,10 +3287,8 @@
   async function applyDisplay() {
     showToast(t('toast.applying'), 'info');
     await applyDisplayTuning();
-    await applyProximityScreen();
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveDisplayTuningConfig();
-    await saveProximityConfig();
     await _loadDisplayTuningSection();
     renderAll();
     showToast(t('toast.saved'), 'success');
@@ -3265,21 +3404,65 @@
 
   async function applyProfile() {
     showToast(t('toast.applying'), 'info');
+    const gov = state.profile.governor;
+    const gp = state.profile.governorProfiles[gov] || GOVERNOR_DEFAULT_PROFILE;
 
-    /* Power mode: enforce Battery Save scaling limits */
-    if (state.profile.powerMode === 0) {
-      const bs = POWER_PRESETS[0];
-      if (bs.cpuMax) {
-        for (const cluster of state.cpuClusters) {
-          if (bs.cpuMax[cluster.id] !== undefined) {
-            await exec('echo ' + bs.cpuMax[cluster.id] + ' > /sys/devices/system/cpu/cpufreq/policy' + cluster.id + '/scaling_max_freq 2>/dev/null');
-            cluster.curMax = bs.cpuMax[cluster.id];
-          }
-        }
-      }
+    /* 1. Set governor on all policies */
+    for (const p of [0, 4, 7]) {
+      await exec('echo ' + gov + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_governor 2>/dev/null');
     }
 
-    /* Gaming monitor + daemon */
+    /* 2. Apply CPU OC parameters from governor profile */
+    const clusterKeys = { l: 0, b: 4, p: 7 };
+    let ocNeeded = false;
+    for (const [key, pid] of Object.entries(clusterKeys)) {
+      const freq = gp[`cpu_oc_${key}_freq`] || 0;
+      const volt = gp[`cpu_oc_${key}_volt`] || 0;
+      if (freq > 0) {
+        await exec('echo ' + freq + ' > ' + KS_PARAMS + 'cpu_oc_' + key + '_freq 2>/dev/null');
+        await exec('echo ' + volt + ' > ' + KS_PARAMS + 'cpu_oc_' + key + '_volt 2>/dev/null');
+        ocNeeded = true;
+      }
+    }
+    if (ocNeeded) {
+      await exec('echo 1 > ' + KS_PARAMS + 'cpu_oc_apply 2>/dev/null');
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    /* 3. Apply scaling limits from governor profile */
+    for (const p of [0, 4, 7]) {
+      const maxF = gp[`cpu_max_${p}`] || 0;
+      const minF = gp[`cpu_min_${p}`] || 0;
+      if (minF > 0) await exec('echo ' + minF + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_min_freq 2>/dev/null');
+      if (maxF > 0) await exec('echo ' + maxF + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_max_freq 2>/dev/null');
+    }
+
+    /* 4. DRAM min freq */
+    if (gp.dram_min > 0) {
+      await exec('echo ' + gp.dram_min + ' > ' + DRAM_DEVFREQ + '/min_freq 2>/dev/null');
+    }
+
+    /* 5. Thermal */
+    state.thermal.cpuMode = gp.cpu_thermal || 0;
+    state.thermal.gpuMode = gp.gpu_thermal || 0;
+    await applyThermal();
+
+    /* 6. Also update cpu_oc.json and cpu_scaling.json for service.sh boot compat */
+    const cpuOcObj = {
+      cpu_oc_l_freq: gp.cpu_oc_l_freq || 0, cpu_oc_l_volt: gp.cpu_oc_l_volt || 0,
+      cpu_oc_b_freq: gp.cpu_oc_b_freq || 0, cpu_oc_b_volt: gp.cpu_oc_b_volt || 0,
+      cpu_oc_p_freq: gp.cpu_oc_p_freq || 0, cpu_oc_p_volt: gp.cpu_oc_p_volt || 0,
+    };
+    await exec(`printf '%s' '${_esc(JSON.stringify(cpuOcObj))}' > ${CONF_CPU_OC}`);
+
+    const scalingObj = {};
+    for (const p of [0, 4, 7]) {
+      scalingObj[`cpu_max_${p}`] = gp[`cpu_max_${p}`] || 0;
+      scalingObj[`cpu_min_${p}`] = gp[`cpu_min_${p}`] || 0;
+    }
+    await exec(`printf '%s' '${_esc(JSON.stringify(scalingObj))}' > ${CONF_CPU_SCALING}`);
+
+    /* 7. Gaming monitor + daemon */
     if (state.profile.autoGaming.enabled && state.profile.autoGaming.apps.length > 0) {
       await startGamingMonitor();
       await restartGamingDaemon();
@@ -3290,9 +3473,11 @@
 
     await exec(`mkdir -p ${CONF_DIR}`);
     await saveProfileConfig();
+    await saveThermalConfig();
 
-    /* Reload Profile section to reflect applied changes */
+    /* Reload to reflect applied changes */
     await _loadProfileSection();
+    await _loadCpuSection();
     renderAll();
 
     showToast(t('toast.saved'), 'success');
@@ -3532,16 +3717,11 @@
       renderAll();
     }
 
-    /* Power mode: enforce Battery Save scaling limits after OC apply */
-    if (state.profile.powerMode === 0) {
-      const bs = POWER_PRESETS[0];
-      if (bs.cpuMax) {
-        for (const cluster of state.cpuClusters) {
-          if (bs.cpuMax[cluster.id] !== undefined) {
-            await exec('echo ' + bs.cpuMax[cluster.id] + ' > /sys/devices/system/cpu/cpufreq/policy' + cluster.id + '/scaling_max_freq 2>/dev/null');
-            cluster.curMax = bs.cpuMax[cluster.id];
-          }
-        }
+    /* Governor: apply saved governor after OC apply */
+    {
+      const gov = state.profile.governor;
+      for (const p of [0, 4, 7]) {
+        await exec('echo ' + gov + ' > /sys/devices/system/cpu/cpufreq/policy' + p + '/scaling_governor 2>/dev/null');
       }
     }
 
@@ -3758,16 +3938,6 @@
     await exec(`echo ${dt.displayIdleTime} > /proc/displowpower/idletime 2>/dev/null`);
   }
 
-  async function applyProximityScreen() {
-    const val = state.displayTuning.proximityScreen ? 'Y' : 'N';
-    await exec(`echo ${val} > /sys/module/kpm_oc/parameters/prox_screen_enabled 2>/dev/null`);
-  }
-
-  async function saveProximityConfig() {
-    const obj = { proximity_screen_enabled: state.displayTuning.proximityScreen };
-    await exec(`printf '%s' '${_esc(JSON.stringify(obj))}' > ${CONF_PROXIMITY}`);
-  }
-
   async function saveDisplayTuningConfig() {
     const dt = state.displayTuning;
     const obj = {
@@ -3824,9 +3994,10 @@
 
   async function saveProfileConfig() {
     const profileJson = JSON.stringify({
-      power_mode:   state.profile.powerMode,
+      governor:     state.profile.governor,
       auto_gaming:  state.profile.autoGaming.enabled ? 1 : 0,
       gaming_apps:  state.profile.autoGaming.apps.join(','),
+      profiles:     state.profile.governorProfiles,
     });
     await exec(`printf '%s' '${_esc(profileJson)}' > ${CONF_PROFILE}`);
   }
@@ -3871,7 +4042,8 @@
     setCpuTuning,
     setDisplayTuning,
     /* Profile & Gaming */
-    setPowerMode,
+    setGovernor,
+    setGovProfile,
     toggleAutoGaming,
     showAppSelector,
     hideAppSelector,
