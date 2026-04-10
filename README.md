@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v10.1) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (v10.7) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, governor-based power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -12,44 +12,51 @@ APatch/KernelSU module (v10.1) providing CPU, GPU, DRAM, Storage overclocking/tu
 - **GPU Per-OPP Voltage Override** — Direct memory writes for any GPU OPP entry, bypassing vendor `fix_custom_freq_volt` validation (DVFSState check, volt clamp). Original values saved and restored on `clear`
 - **GPUEB OPP Countermeasure** *(v7.2)* — kprobe on `__gpufreq_generic_commit_gpu` re-patches GPU OPP voltages immediately before every GPU DVFS commit, preventing GPUEB firmware from reverting OC voltage to stock
 - **GPU PLL Direct Programming** *(v8.0)* — kretprobe on `gpufreq_commit` reprograms MFG PLL CON1 after GPUEB commits above-stock OC frequency
-- **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2`
-- **DRAM Frequency Floor** *(v7.3)* — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
+- **GPU OPP Table** — Displays GPU OPP entries from `/proc/gpufreqv2` — Controls DRAM minimum frequency via DVFSRC devfreq, locking LPDDR5X at higher OPPs for sustained memory bandwidth. Vcore automatically scales with frequency
 - **Storage / UFS Tuning** *(v7.5)* — Per-device block queue tuning (I/O scheduler, read-ahead, rq_affinity, nomerges, iostats, entropy feed) and UFS controller settings (Write Booster, clock gating on/delay, auto-hibernate timer, RPM/SPM power levels). UFS version detected dynamically from `specification_version` (UFS 4.0 on this device). Uses `printf|tee` writes for ufshcd sysfs compatibility (`echo >` blocked by kernel `O_CREAT` check)
 - **Thermal Mitigation** *(v7.6)* — Per-component thermal controls: CPU trip point raising (Soft +15°C / Hard +30°C + cdev lock), GPU cooling device lock (Soft) and OPP pinning via `fix_target_opp_index` (Hard)
-- **Power Profiles** *(v8.0)* — Three selectable power modes (Battery Save / Normal / Performance) that control CPU scaling limits, DRAM floor, and thermal mitigation as a single preset
-- **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic Performance OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all power modes
-- **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 5 tabs (CPU / GPU / RAM / Storage / Profile), i18n support (English / 日本語), language switcher in header: add new OPP entries, adjust freq/volt per entry, set scaling limits, DRAM freq floor selector, I/O tuning, thermal controls, power mode switching, gaming app selector with icons, per-section Apply buttons
-- **Configuration Persistence** *(v9.0)* — OC params, scaling limits, DRAM min freq, I/O/UFS settings, thermal modes, power profile, and gaming app list saved to per-section JSON files under `conf/`; automatically restored on boot via `insmod` params and sysfs writes. Legacy single-file `oc_config.json` is auto-migrated on first boot
-- **Per-Section Save/Apply** *(v10.1)* — Each WebUI section has its own Apply button that saves only that section's config and reloads the display. Changes are instantaneous without affecting other sections
+- **Governor-Based Profiles** *(v10.5+)* — Each CPU frequency governor (schedutil, performance, powersave, ondemand, conservative, userspace) stores its own preset of CPU OC targets, scaling limits, DRAM floor, and thermal modes. Switching governors applies the saved preset automatically. Localized governor names and usage descriptions displayed in EN/JA
+- **Auto Gaming Mode** *(v8.0)* — Foreground app detection with automatic max-OC boost for user-selected apps. Includes app selector with icon display, background monitoring daemon, and auto-revert when the gaming app exits. Works independently across all governor profiles
+- **CPU Tuning** *(v9.5+)* — schedutil up/down rate limits, cpuidle max state, energy-aware scheduling, child-runs-first, uclamp top-app min, FPSGO boost/rescue toggles
+- **GPU Tuning** *(v9.5+)* — Mali-G720 DVFS period, idle hysteresis, shader power-off delay, command stream group period, power policy, and per-driver property overrides (LTO, pilot shaders, AFBC, CRC, IDVS, pre-rotation, Vulkan HWUI/RenderEngine)
+- **Display Tuning** *(v9.5+)* — Fixed/adaptive refresh rate mode (60/90/120/144 Hz), animation scale factors, PQ controls (color saturation, sharpness, ultra resolution, DRE, HDR, HFG), display idle timeout
+- **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 6 tabs (CPU / GPU / RAM / Storage / Profile / Display), i18n support (English / 日本語), language switcher in header. Per-section Apply buttons; changes are instantaneous without affecting other sections
+- **Configuration Persistence** *(v9.0)* — All settings saved to per-section JSON files under `conf/` (12 files); automatically restored on boot via `insmod` params and sysfs writes. Legacy single-file `oc_config.json` is auto-migrated on first boot
 
 ## Structure
 
 ```text
-├── module.prop                     # APatch module metadata (v10.1)
-├── kpm_oc.ko                       # Compiled kernel module (v8.0)
-├── service.sh                      # Boot-time service (v9.0)
+├── module.prop                     # APatch module metadata (v10.7)
+├── kpm_oc.ko                       # Compiled kernel module (v8.1)
+├── service.sh                      # Boot-time service
 ├── icon_extractor.dex              # DEX for app icon extraction (ActivityThread → Bitmap → base64)
 ├── conf.default/                   # Default config files (seeded on first install)
 │   ├── cpu_oc.json                 # CPU OC freq/volt per cluster (L/B/P)
 │   ├── gpu_oc.json                 # GPU OC freq/volt/vsram
 │   ├── cpu_scaling.json            # CPU scaling min/max per policy
+│   ├── cpu_tuning.json             # schedutil rates, cpuidle, sched, uclamp, FPSGO
+│   ├── gpu_tuning.json             # Mali DVFS period, hysteresis, power policy, driver props
+│   ├── display_tuning.json         # Refresh rate mode, PQ settings, animation scales
 │   ├── dram.json                   # DRAM minimum frequency
 │   ├── io.json                     # I/O scheduler settings
-│   ├── ufs.json                    # UFS write booster
+│   ├── ufs.json                    # UFS write booster + controller settings
 │   ├── thermal.json                # CPU/GPU thermal modes
-│   └── profile.json                # Power mode, auto gaming, gaming apps
+│   ├── profile.json                # Active governor, auto gaming, gaming apps, governor presets
+│   └── proximity.json              # Vestigial stub — proximity hardware not present on this device
 ├── conf/                           # Active config (per-user, persisted across reboots)
-│   └── (same 8 files as conf.default/)
+│   └── (same files as conf.default/)
+├── tools/                          # Build-time Java tools (ProbeAPI, SetDisplayMode, icon extractor sources)
+│   └── dex_out/classes.dex         # Compiled DEX deployed on-device for icon extraction
 └── webroot/
-    ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile tabs)
-    ├── i18n.js                     # Internationalization module (EN / JA)
-    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O + thermal + gaming)
+    ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile/Display tabs)
+    ├── i18n.js                     # Internationalization module (EN / JA), governor name/desc strings
+    ├── app.js                      # Application logic (APatch ksu.exec API, OC via kpm_oc sysfs + devfreq + block I/O + thermal + gaming + display)
     └── style.css                   # Dark glassmorphism design system
 ```
 
-## Boot Flow (`service.sh` v10.1)
+## Boot Flow (`service.sh`)
 
-1. **Migrate legacy config** — If `oc_config.json` exists and `conf/cpu_oc.json` does not, extract values into 8 split files under `conf/` and rename old file to `.bak.v9`
+1. **Migrate legacy config** — If `oc_config.json` exists and `conf/cpu_oc.json` does not, extract values into split files under `conf/` and rename old file to `.bak.v9`
 2. **Seed defaults** — Copy any missing `conf/*.json` from `conf.default/`
 3. Parse `conf/cpu_oc.json` + `conf/gpu_oc.json` for saved OC params and build `insmod` parameter string
 4. Load `kpm_oc.ko` with OC params (e.g. `insmod kpm_oc.ko cpu_oc_p_freq=4000000 gpu_target_freq=1900000 ...`)
@@ -68,7 +75,10 @@ APatch/KernelSU module (v10.1) providing CPU, GPU, DRAM, Storage overclocking/tu
     - Re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor
     - Applies thermal mitigation (CPU trip point raising + GPU cooling device lock) per saved mode from `conf/thermal.json`
     - Applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) from `conf/io.json` to all UFS block devices
-    - Restores UFS controller settings (Write Booster) from `conf/ufs.json`
+    - Restores UFS controller settings (Write Booster, clock gating, auto-hibernate, RPM/SPM levels) from `conf/ufs.json`
+    - Applies GPU tuning parameters (DVFS period, idle hysteresis, power policy, Mali driver props) from `conf/gpu_tuning.json`
+    - Applies CPU tuning parameters (schedutil rates, cpuidle, sched flags, uclamp, FPSGO) from `conf/cpu_tuning.json`
+    - Applies display settings (refresh rate, animation scales, PQ) from `conf/display_tuning.json`
     - Starts `gaming_monitor.sh` daemon if `auto_gaming=1` in `conf/profile.json` and gaming apps are configured
 
 ### Config Persistence (v9.0 — Split Files)
@@ -83,11 +93,14 @@ Legacy single-file `oc_config.json` is auto-migrated to split files on first boo
 | `cpu_oc.json` | `cpu_oc_{l,b,p}_{freq,volt}` | `{"cpu_oc_p_freq":4000000,"cpu_oc_p_volt":1150000,...}` |
 | `gpu_oc.json` | `gpu_oc_{freq,volt,vsram}` | `{"gpu_oc_freq":1900000,"gpu_oc_volt":115040,"gpu_oc_vsram":95000}` |
 | `cpu_scaling.json` | `cpu_{max,min}_{0,4,7}` | `{"cpu_max_0":3800000,"cpu_min_0":480000,...}` |
+| `cpu_tuning.json` | `sugov_{up,down}_rate_limit_us`, `cpuidle_max_state`, `sched_{energy_aware,child_runs_first}`, `uclamp_top_app_min`, `fpsgo_{boost_ta,rescue_enable}` | `{"sugov_up_rate_limit_us":1000,...}` |
+| `gpu_tuning.json` | `gpu_dvfs_period_ms`, `gpu_idle_hysteresis_ms`, `gpu_shader_pwroff_ms`, `gpu_power_policy`, `gpu_csg_period_ms`, Mali driver props | `{"gpu_dvfs_period_ms":100,...}` |
+| `display_tuning.json` | `refresh_mode`, `peak_refresh_rate`, `min_refresh_rate`, animation scales, PQ flags | `{"refresh_mode":"fixed","peak_refresh_rate":144,...}` |
 | `dram.json` | `dram_min_freq` | `{"dram_min_freq":6400000000}` |
 | `io.json` | `io_{read_ahead_kb,scheduler,...}` | `{"io_read_ahead_kb":2048,"io_scheduler":"none",...}` |
 | `ufs.json` | `ufs_wb_on`, `ufs_clkgate_enable`, `ufs_clkgate_delay_ms`, `ufs_auto_hibern8`, `ufs_rpm_lvl`, `ufs_spm_lvl` | `{"ufs_wb_on":1,"ufs_clkgate_enable":1,"ufs_clkgate_delay_ms":10,"ufs_auto_hibern8":0,"ufs_rpm_lvl":3,"ufs_spm_lvl":3}` |
 | `thermal.json` | `cpu_thermal_mode`, `gpu_thermal_mode` | `{"cpu_thermal_mode":0,"gpu_thermal_mode":0}` |
-| `profile.json` | `power_mode`, `auto_gaming`, `gaming_apps` | `{"power_mode":1,"auto_gaming":0,"gaming_apps":""}` |
+| `profile.json` | `governor`, `governor_profiles`, `auto_gaming`, `gaming_apps` | `{"governor":"schedutil","governor_profiles":{...},"auto_gaming":0,"gaming_apps":""}` |
 
 All files are minified single-line JSON (no spaces around colons) for compatibility with lightweight `grep`-based parsing — no `jq` needed.
 
@@ -277,21 +290,33 @@ The WebUI's Thermal section (in CPU/GPU cards) provides per-component thermal co
 
 Settings are persisted in `conf/thermal.json` (`cpu_thermal_mode`, `gpu_thermal_mode`) and restored on boot via the late-boot relift pass.
 
-## Power Profiles
+## Governor-Based Profiles
 
-Three selectable power modes that apply preset CPU scaling limits, DRAM floor, and thermal settings as a single tap.
+Each CPU frequency governor stores its own preset of CPU OC targets, scaling limits, DRAM minimum frequency, and thermal modes. Switching governors from the Profile tab applies the saved preset automatically; if no preset has been saved for a governor, a built-in default is used.
 
-| Mode | CPU Max (L/B/P) | DRAM Floor | Thermal |
-|------|------------------|------------|---------|
-| 🔋 Battery Save | 1600 / 2000 / 2000 MHz | 800 MHz | Off |
-| ⚡ Normal | As configured | As configured | Off |
-| 🚀 Performance | 3800 / 3800 / 4000 MHz | 6400 MHz | Soft |
+| Governor | Icon | Typical Use |
+|----------|------|-------------|
+| `schedutil` | ⚡ | Default — frequency tracks CPU utilisation via EAS |
+| `performance` | 🚀 | Pins all CPUs at max frequency (maximum performance) |
+| `powersave` | 🔋 | Pins all CPUs at min frequency (minimum power) |
+| `ondemand` | 📊 | Aggressive ramp-up based on CPU load sampling |
+| `conservative` | 🛡️ | Gradual ramp-up/down, lower power than ondemand |
+| `userspace` | 🎛️ | Manual frequency control via `scaling_setspeed` |
 
-- **Battery Save** reduces clock ceilings for maximum battery life. After `Apply Changes`, scaling limits are re-enforced to override the OC values.
-- **Normal** uses the saved OC config values without modification.
-- **Performance** applies maximum OC + thermal mitigation + DRAM at max OPP.
+Each governor profile stores:
 
-Switching modes updates the UI state immediately; tap **Apply Changes** to activate on hardware.
+| Field | Description |
+|-------|-------------|
+| `cpu_oc_{l,b,p}_{freq,volt}` | Per-cluster OC target KHz / µV |
+| `cpu_{max,min}_{0,4,7}` | cpufreq scaling ceiling / floor per policy |
+| `dram_min` | DRAM devfreq minimum frequency floor (Hz) |
+| `cpu_thermal` / `gpu_thermal` | Thermal mitigation mode (0=Off / 1=Soft / 2=Hard) |
+
+- **Battery Save** — use `powersave` governor with reduced scaling limits and no thermal mitigation
+- **Normal** — use `schedutil` with the saved OC config and no thermal mitigation
+- **Performance** — use `performance` governor with max OC (4000 MHz P-cluster) + Soft thermal + DRAM 6400 MHz
+
+Switching tabs and tapping **Apply** saves the profile and applies it to hardware immediately.
 
 ## Auto Gaming Mode
 
@@ -420,6 +445,23 @@ PM level values: `0`=None, `1`=Active, `2`=Standby, `3`=Sleep/Hibern8, `4`=Power
 | Foreground app | `dumpsys activity activities` / `dumpsys window` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
+
+## Not Implemented / Known Limitations
+
+### DT2W (Double Tap to Wake)
+
+Double-tap-to-wake gesture support was investigated and a working prototype was confirmed (kprobe on `nvt_bootloader_reset` pre-handler), but it was removed for the following reasons:
+
+- **Touch driver in vendor module** — The NT36523 touch controller driver (`nvt_ts`) is compiled into a vendor kernel module. Its internal symbols (`nvt_bootloader_reset`, `nvt_ts_resume`, etc.) are not exported to the GKI kernel. Kprobe registration depends on `kallsyms_lookup_name` at runtime and succeeds only when the vendor module loads first; this is not guaranteed.
+- **`nvt_ts_pm_resume()` does not fire** — This device uses a DRM notifier-only path for display power management. The standard `pm_suspend` / `pm_resume` callbacks in the NT36523 driver are never invoked, so the documented gesture-mode API (writing to gesture registers in the resume path) does not work. DT2W requires a lower-level workaround.
+- **Fragile kprobe workaround** — The working implementation used a pre-handler kprobe on `nvt_bootloader_reset` to re-arm the gesture EINT before the firmware reset cleared it. The correct timing relies on `nvt_ts_resume()` → `nvt_bootloader_reset()` → gesture EINT re-arm, which is an undocumented internal order that can change silently across vendor OTA updates.
+- **GKI CFI / KCFI constraints** — GKI 6.1 is built with `CONFIG_CFI_CLANG=y`. Kprobing non-exported vendor module functions can produce KCFI type hash mismatches and trigger an immediate kernel panic and boot loop. Handlers must be carefully annotated `__nocfi`, and even then, indirect calls through kallsyms-resolved pointers carry risk.
+
+### Proximity Sensor
+
+The Headwolf F8 does not have a proximity sensor. There is no proximity sensor IC wired to the SoC on this hardware revision and no corresponding devicetree node is defined. Any code path that reads a proximity sensor event source returns no data. The `conf/proximity.json` file is a vestigial stub left from an earlier exploration and is not used at runtime.
+
+---
 
 ## Installation
 
