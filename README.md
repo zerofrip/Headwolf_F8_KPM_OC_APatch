@@ -450,11 +450,17 @@ For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-ma
 
 ### DT2W (Double Tap to Wake)
 
-Double-tap-to-wake gesture support was investigated and a working prototype was confirmed (kprobe on `nvt_bootloader_reset` pre-handler), but it was removed for the following reasons:
+Double-tap-to-wake gesture support was investigated and a working prototype was confirmed (kprobe on `nvt_bootloader_reset` pre-handler), but it was removed. The primary reason is a fundamental hardware constraint; additional software-level blockers make a kprobe-based workaround futile regardless.
 
-- **Touch driver in vendor module** — The NT36523 touch controller driver (`nvt_ts`) is compiled into a vendor kernel module. Its internal symbols (`nvt_bootloader_reset`, `nvt_ts_resume`, etc.) are not exported to the GKI kernel. Kprobe registration depends on `kallsyms_lookup_name` at runtime and succeeds only when the vendor module loads first; this is not guaranteed.
-- **`nvt_ts_pm_resume()` does not fire** — This device uses a DRM notifier-only path for display power management. The standard `pm_suspend` / `pm_resume` callbacks in the NT36523 driver are never invoked, so the documented gesture-mode API (writing to gesture registers in the resume path) does not work. DT2W requires a lower-level workaround.
-- **Fragile kprobe workaround** — The working implementation used a pre-handler kprobe on `nvt_bootloader_reset` to re-arm the gesture EINT before the firmware reset cleared it. The correct timing relies on `nvt_ts_resume()` → `nvt_bootloader_reset()` → gesture EINT re-arm, which is an undocumented internal order that can change silently across vendor OTA updates.
+#### Root cause: TDDI hardware constraint (cannot be solved in software)
+
+The NT36523 is a **TDDI (Touch and Display Driver Integration)** chip in which the touch-sensing hardware is physically integrated with the display driver. When the display panel power is cut, the TDDI chip loses power entirely — touch sensing stops at the hardware level. No gesture mode, including the vendor gesture mode (`0x13`) or the normal-keep mode (`0xFF`), can detect any touch input while the screen is physically powered off. This is not a driver bug or a missing register write; it is an inherent hardware limitation of the TDDI architecture on this device. No software running on the AP — including kprobes, kernel modules, or userspace code — can override it.
+
+#### Additional software-level blockers
+
+- **Touch driver in vendor module** — The NT36523 driver (`nvt_ts`) is compiled into a vendor kernel module. Its internal symbols (`nvt_bootloader_reset`, `nvt_ts_resume`, etc.) are not exported to the GKI kernel. Kprobe registration relies on `kallsyms_lookup_name` at runtime and succeeds only when the vendor module loads first; this is not guaranteed.
+- **`nvt_ts_pm_resume()` does not fire** — This device uses a DRM notifier-only path for display power management. The standard `pm_suspend` / `pm_resume` callbacks in the NT36523 driver are never invoked, so the documented gesture-mode API (writing gesture registers in the resume path) cannot be used directly.
+- **Fragile kprobe workaround** — The working implementation used a pre-handler kprobe on `nvt_bootloader_reset` to re-arm the gesture EINT before the firmware reset cleared it. The correct timing depends on `nvt_ts_resume()` → `nvt_bootloader_reset()` → gesture EINT re-arm, which is an undocumented internal order that can change silently across vendor OTA updates.
 - **GKI CFI / KCFI constraints** — GKI 6.1 is built with `CONFIG_CFI_CLANG=y`. Kprobing non-exported vendor module functions can produce KCFI type hash mismatches and trigger an immediate kernel panic and boot loop. Handlers must be carefully annotated `__nocfi`, and even then, indirect calls through kallsyms-resolved pointers carry risk.
 
 ### Proximity Sensor
