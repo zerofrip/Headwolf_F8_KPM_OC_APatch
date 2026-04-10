@@ -6,5 +6,5 @@
 *.swp
 *~
 .vscode/
-.class
-.dex
+*.class
+*.dex
