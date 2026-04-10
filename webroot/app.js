@@ -1422,65 +1422,18 @@
     let govCards = '';
     govs.forEach(g => {
       const icon = GOVERNOR_ICONS[g] || '⚙️';
+      const gName = t(`governor.${g}.name`, {}, g);
       govCards += `
         <div class="power-mode-card ${gov === g ? 'active' : ''}"
              onclick="window.OC.setGovernor('${g}')">
           <span class="pm-icon">${icon}</span>
-          <span class="pm-label">${g}</span>
+          <span class="pm-label">${gName}</span>
         </div>`;
     });
 
-    /* OC summary rows */
-    const clusterLabels = { l: 'LITTLE', b: 'big', p: 'PRIME' };
-    const clusterPolicies = { l: 0, b: 4, p: 7 };
-    let ocRows = '';
-    for (const [key, label] of Object.entries(clusterLabels)) {
-      const freq = gp[`cpu_oc_${key}_freq`] || 0;
-      const volt = gp[`cpu_oc_${key}_volt`] || 0;
-      const pid = clusterPolicies[key];
-      const maxF = gp[`cpu_max_${pid}`] || 0;
-      const minF = gp[`cpu_min_${pid}`] || 0;
-      ocRows += `
-        <div class="setting-row" style="padding:0 4px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-            <span style="font-weight:600;font-size:0.82rem;color:var(--text-primary)">${label} (P${pid})</span>
-            <span class="info-chip freq">${freq > 0 ? formatFreqKHz(freq) : 'Stock'}</span>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
-            <div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.oc_freq')}</div>
-              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
-                value="${freq > 0 ? freq : ''}" placeholder="KHz"
-                onchange="window.OC.setGovProfile('cpu_oc_${key}_freq', parseInt(this.value)||0)">
-            </div>
-            <div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.oc_volt')}</div>
-              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
-                value="${volt > 0 ? volt : ''}" placeholder="µV"
-                onchange="window.OC.setGovProfile('cpu_oc_${key}_volt', parseInt(this.value)||0)">
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-            <div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.scaling_max')}</div>
-              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
-                value="${maxF}" placeholder="KHz"
-                onchange="window.OC.setGovProfile('cpu_max_${pid}', parseInt(this.value)||0)">
-            </div>
-            <div>
-              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.scaling_min')}</div>
-              <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
-                value="${minF}" placeholder="KHz"
-                onchange="window.OC.setGovProfile('cpu_min_${pid}', parseInt(this.value)||0)">
-            </div>
-          </div>
-        </div>`;
-    }
-
-    /* DRAM & Thermal row */
-    const dramMin = gp.dram_min || 0;
-    const cpuTh = gp.cpu_thermal || 0;
-    const gpuTh = gp.gpu_thermal || 0;
+    /* Governor description for currently selected governor */
+    const govDescKey = `governor.${gov}.desc`;
+    const govDesc = t(govDescKey, {}, '');
 
     // Gaming status
     let statusHtml = '';
@@ -1519,49 +1472,11 @@
         <div class="power-mode-grid">
           ${govCards}
         </div>
+        ${govDesc ? `<div style="padding:6px 12px 2px;font-size:0.78rem;color:var(--text-secondary);line-height:1.5">
+          💡 ${govDesc}
+        </div>` : ''}
         <div style="padding:4px 12px 8px;font-size:0.72rem;color:var(--text-muted);line-height:1.5">
           ${t('profile.governor_hint')}
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">🔧</span>
-            ${t('profile.oc_section')} — ${gov}
-          </div>
-        </div>
-        <div class="settings-list" style="gap:14px">
-          ${ocRows}
-          <div class="setting-divider"></div>
-          <div class="setting-row" style="padding:0 4px">
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-              <div>
-                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.dram_min')}</div>
-                <input type="number" class="config-input" style="width:100%;font-size:0.8rem"
-                  value="${dramMin}" placeholder="Hz"
-                  onchange="window.OC.setGovProfile('dram_min', parseInt(this.value)||0)">
-              </div>
-              <div>
-                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.cpu_thermal')}</div>
-                <select class="config-input" style="width:100%;font-size:0.8rem"
-                  onchange="window.OC.setGovProfile('cpu_thermal', parseInt(this.value))">
-                  <option value="0" ${cpuTh===0?'selected':''}>${t('thermal.off')}</option>
-                  <option value="1" ${cpuTh===1?'selected':''}>${t('thermal.soft')}</option>
-                  <option value="2" ${cpuTh===2?'selected':''}>${t('thermal.hard')}</option>
-                </select>
-              </div>
-              <div>
-                <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${t('profile.gpu_thermal')}</div>
-                <select class="config-input" style="width:100%;font-size:0.8rem"
-                  onchange="window.OC.setGovProfile('gpu_thermal', parseInt(this.value))">
-                  <option value="0" ${gpuTh===0?'selected':''}>${t('thermal.off')}</option>
-                  <option value="1" ${gpuTh===1?'selected':''}>${t('thermal.soft')}</option>
-                  <option value="2" ${gpuTh===2?'selected':''}>${t('thermal.hard')}</option>
-                </select>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1832,26 +1747,35 @@
       }
     }
 
-    state.cpuClusters = [];
-    for (const policy of CPU_POLICIES) {
-      const freqRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_available_frequencies 2>/dev/null`);
-      const freqs = freqRes.stdout.trim()
-        ? freqRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b)
+    const [_cpuPolicyBatch, cpuConfRes] = await Promise.all([
+      exec(CPU_POLICIES.map(p =>
+        `echo "F${p}:$(cat /sys/devices/system/cpu/cpufreq/policy${p}/scaling_available_frequencies 2>/dev/null)";` +
+        `echo "X${p}:$(cat /sys/devices/system/cpu/cpufreq/policy${p}/scaling_max_freq 2>/dev/null)";` +
+        `echo "N${p}:$(cat /sys/devices/system/cpu/cpufreq/policy${p}/scaling_min_freq 2>/dev/null)"`
+      ).join('; ')),
+      exec(`cat ${CONF_CPU_OC} 2>/dev/null`),
+    ]);
+    const _pd = {};
+    for (const line of _cpuPolicyBatch.stdout.split('\n')) {
+      const m = line.match(/^([FXN])(\d+):(.*)$/);
+      if (m) { if (!_pd[m[2]]) _pd[m[2]] = {}; _pd[m[2]][m[1]] = m[3].trim(); }
+    }
+    state.cpuClusters = CPU_POLICIES.map(policy => {
+      const d = _pd[policy] || {};
+      const freqs = d.F
+        ? d.F.split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f)).sort((a, b) => a - b)
         : [];
-      const maxRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq 2>/dev/null`);
-      const minRes = await exec(`cat /sys/devices/system/cpu/cpufreq/policy${policy}/scaling_min_freq 2>/dev/null`);
-      state.cpuClusters.push({
+      return {
         id: policy,
         entries: cpuMap.get(policy) || [],
         freqs,
-        curMax: parseInt(maxRes.stdout.trim(), 10) || (freqs.length > 0 ? freqs[freqs.length - 1] : 0),
-        curMin: parseInt(minRes.stdout.trim(), 10) || (freqs.length > 0 ? freqs[0] : 0),
-      });
-    }
+        curMax: parseInt(d.X, 10) || (freqs.length > 0 ? freqs[freqs.length - 1] : 0),
+        curMin: parseInt(d.N, 10) || (freqs.length > 0 ? freqs[0] : 0),
+      };
+    });
     state.originalCpu = JSON.parse(JSON.stringify(state.cpuClusters));
 
     /* Restore CPU config overrides */
-    const cpuConfRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
     if (cpuConfRes.stdout.trim()) {
       try {
         const cpuConf = JSON.parse(cpuConfRes.stdout.trim());
@@ -1979,7 +1903,7 @@
   async function _loadCpuTuningSection() {
     const ct = state.cpuTuning;
     /* Read live device values */
-    const [upRes, downRes, easRes, childRes, uclampRes, fpsgoTaRes, fpsgoRescRes] = await Promise.all([
+    const [upRes, downRes, easRes, childRes, uclampRes, fpsgoTaRes, fpsgoRescRes, idleRes, cfgRes] = await Promise.all([
       exec('cat /sys/devices/system/cpu/cpufreq/policy0/sugov_ext/up_rate_limit_us 2>/dev/null'),
       exec('cat /sys/devices/system/cpu/cpufreq/policy0/sugov_ext/down_rate_limit_us 2>/dev/null'),
       exec('cat /proc/sys/kernel/sched_energy_aware 2>/dev/null'),
@@ -1987,6 +1911,8 @@
       exec('cat /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null'),
       exec('cat /sys/kernel/fpsgo/fbt/boost_ta 2>/dev/null'),
       exec('cat /sys/kernel/fpsgo/fbt/rescue_enable 2>/dev/null'),
+      exec('for s in 0 1 2 3 4 5 6; do d=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state${s}/disable 2>/dev/null); [ -z "$d" ] && break; echo "${s}:${d}"; done'),
+      exec(`cat ${CONF_CPU_TUNING} 2>/dev/null`),
     ]);
     if (upRes.stdout.trim()) ct.sugovUpRate = parseInt(upRes.stdout.trim(), 10) || ct.sugovUpRate;
     if (downRes.stdout.trim()) ct.sugovDownRate = parseInt(downRes.stdout.trim(), 10) || ct.sugovDownRate;
@@ -1999,8 +1925,7 @@
     if (fpsgoTaRes.stdout.trim()) ct.fpsgoBoostTa = parseInt(fpsgoTaRes.stdout.trim(), 10) || 0;
     if (fpsgoRescRes.stdout.trim()) ct.fpsgoRescueEnable = parseInt(fpsgoRescRes.stdout.trim(), 10) || 0;
 
-    /* Also read cpuidle max enabled state */
-    const idleRes = await exec('for s in 0 1 2 3 4 5 6; do d=$(cat /sys/devices/system/cpu/cpu0/cpuidle/state${s}/disable 2>/dev/null); [ -z "$d" ] && break; echo "${s}:${d}"; done');
+    /* cpuidle max enabled state */
     let maxState = 6;
     for (const line of idleRes.stdout.split('\n')) {
       const m = line.match(/^(\d+):(\d+)$/);
@@ -2009,7 +1934,6 @@
     ct.cpuidleMaxState = maxState >= 0 ? maxState : 0;
 
     /* Overlay saved config */
-    const cfgRes = await exec(`cat ${CONF_CPU_TUNING} 2>/dev/null`);
     if (cfgRes.stdout.trim()) {
       try {
         const cfg = JSON.parse(cfgRes.stdout.trim());
@@ -2088,8 +2012,10 @@
   }
 
   async function _loadThermalSection() {
-    await loadThermalData();
-    const thermalCfgRes = await exec(`cat ${CONF_THERMAL} 2>/dev/null`);
+    const [, thermalCfgRes] = await Promise.all([
+      loadThermalData(),
+      exec(`cat ${CONF_THERMAL} 2>/dev/null`),
+    ]);
     if (thermalCfgRes.stdout) {
       const cpuTM = thermalCfgRes.stdout.match(/"cpu_thermal_mode"\s*:\s*(\d+)/);
       const gpuTM = thermalCfgRes.stdout.match(/"gpu_thermal_mode"\s*:\s*(\d+)/);
@@ -2099,11 +2025,8 @@
   }
 
   async function _loadRamSection() {
-    const ramAvailRes = await exec(`cat ${DRAM_DEVFREQ}/available_frequencies 2>/dev/null`);
-    const ramFreqs = ramAvailRes.stdout.trim()
-      ? ramAvailRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f) && f > 0).sort((a, b) => a - b)
-      : [];
-    const [ramCurRes, ramMinRes, ramMaxRes, ramGovRes, ramRateRes, ramTypeRes, vcoreRes] = await Promise.all([
+    const [ramAvailRes, ramCurRes, ramMinRes, ramMaxRes, ramGovRes, ramRateRes, ramTypeRes, vcoreRes] = await Promise.all([
+      exec(`cat ${DRAM_DEVFREQ}/available_frequencies 2>/dev/null`),
       exec(`cat ${DRAM_DEVFREQ}/cur_freq 2>/dev/null`),
       exec(`cat ${DRAM_DEVFREQ}/min_freq 2>/dev/null`),
       exec(`cat ${DRAM_DEVFREQ}/max_freq 2>/dev/null`),
@@ -2112,6 +2035,9 @@
       exec(`cat ${DRAM_TYPE_PATH} 2>/dev/null`),
       exec(`cat ${VCORE_UV_PATH} 2>/dev/null`),
     ]);
+    const ramFreqs = ramAvailRes.stdout.trim()
+      ? ramAvailRes.stdout.trim().split(/\s+/).map(f => parseInt(f, 10)).filter(f => !isNaN(f) && f > 0).sort((a, b) => a - b)
+      : [];
     const rateMatch = ramRateRes.stdout.match(/(\d+)/);
     const typeMatch = ramTypeRes.stdout.match(/(\d+)/);
     const ramMinHz = parseInt(ramMinRes.stdout.trim(), 10) || 0;
@@ -2130,18 +2056,17 @@
   }
 
   async function _loadProfileSection() {
-    /* Read available governors from sysfs */
-    const govListRes = await exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null');
+    const [govListRes, govCurRes, profileCfgRes] = await Promise.all([
+      exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null'),
+      exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null'),
+      exec(`cat ${CONF_PROFILE} 2>/dev/null`),
+    ]);
     if (govListRes.stdout.trim()) {
       state.profile.availableGovernors = govListRes.stdout.trim().split(/\s+/);
     }
-    /* Read current governor */
-    const govCurRes = await exec('cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null');
     if (govCurRes.stdout.trim()) {
       state.profile.governor = govCurRes.stdout.trim();
     }
-
-    const profileCfgRes = await exec(`cat ${CONF_PROFILE} 2>/dev/null`);
     if (profileCfgRes.stdout) {
       try {
         const cfg = JSON.parse(profileCfgRes.stdout.trim());
@@ -2168,7 +2093,10 @@
     if (!state.profile.governorProfiles[state.profile.governor]) {
       state.profile.governorProfiles[state.profile.governor] = { ...GOVERNOR_DEFAULT_PROFILE };
       /* Populate from current cpu_oc / cpu_scaling configs if available */
-      const ocRes = await exec(`cat ${CONF_CPU_OC} 2>/dev/null`);
+      const [ocRes, scRes] = await Promise.all([
+        exec(`cat ${CONF_CPU_OC} 2>/dev/null`),
+        exec(`cat ${CONF_CPU_SCALING} 2>/dev/null`),
+      ]);
       if (ocRes.stdout.trim()) {
         try {
           const oc = JSON.parse(ocRes.stdout.trim());
@@ -2178,7 +2106,6 @@
           }
         } catch (e) { /* ignore */ }
       }
-      const scRes = await exec(`cat ${CONF_CPU_SCALING} 2>/dev/null`);
       if (scRes.stdout.trim()) {
         try {
           const sc = JSON.parse(scRes.stdout.trim());
@@ -2199,14 +2126,16 @@
     state.moduleLoaded = modCheck.errno === 0 && modCheck.stdout.includes('kpm_oc');
     updateModuleStatus();
 
-    await _loadCpuSection();
-    await _loadGpuSection();
-    await _loadGpuTuningSection();
-    await _loadCpuTuningSection();
-    await _loadDisplayTuningSection();
-    await _loadThermalSection();
-    await _loadProfileSection();
-    await _loadRamSection();
+    await Promise.all([
+      _loadCpuSection(),
+      _loadGpuSection(),
+      _loadGpuTuningSection(),
+      _loadCpuTuningSection(),
+      _loadDisplayTuningSection(),
+      _loadThermalSection(),
+      _loadProfileSection(),
+      _loadRamSection(),
+    ]);
 
     renderAll();
     const cpuCount = state.cpuClusters.reduce((s, c) => s + c.entries.length, 0);
@@ -3478,6 +3407,8 @@
     /* Reload to reflect applied changes */
     await _loadProfileSection();
     await _loadCpuSection();
+    await _loadRamSection();
+    await _loadThermalSection();
     renderAll();
 
     showToast(t('toast.saved'), 'success');

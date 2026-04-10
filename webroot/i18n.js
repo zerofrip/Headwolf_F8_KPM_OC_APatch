@@ -271,15 +271,20 @@
 
       /* Profile */
       'profile.governor': 'CPU Governor',
-      'profile.governor_hint': '⚠ Switching governor updates CPU scaling policy and restores per-governor OC / scaling / thermal settings. Tap <strong>Apply Changes</strong> to activate.',
-      'profile.oc_section': 'OC & Scaling',
-      'profile.oc_freq': 'OC Freq (KHz)',
-      'profile.oc_volt': 'Voltage (µV)',
-      'profile.scaling_max': 'Scale Max (KHz)',
-      'profile.scaling_min': 'Scale Min (KHz)',
-      'profile.dram_min': 'DRAM Min (Hz)',
-      'profile.cpu_thermal': 'CPU Thermal',
-      'profile.gpu_thermal': 'GPU Thermal',
+      'profile.governor_hint': '⚠ Switching governor restores per-governor OC / scaling / DRAM / thermal settings. Tap <strong>Apply Changes</strong> to activate.',
+      'governor.schedutil.name': 'Schedutil',
+      'governor.schedutil.desc': 'Balanced — dynamically adjusts CPU frequency based on scheduler utilization metrics. Best for daily use.',
+      'governor.performance.name': 'Performance',
+      'governor.performance.desc': 'Maximum performance — locks all CPU cores at their highest frequency. Best for benchmarks and heavy workloads.',
+      'governor.powersave.name': 'Powersave',
+      'governor.powersave.desc': 'Battery saver — locks all CPU cores at their lowest frequency. Maximizes battery life at the cost of responsiveness.',
+      'governor.ondemand.name': 'Ondemand',
+      'governor.ondemand.desc': 'Reactive — ramps up frequency quickly on load, drops slowly. More aggressive than schedutil.',
+      'governor.conservative.name': 'Conservative',
+      'governor.conservative.desc': 'Gradual — scales frequency up/down in small steps. Smoother than ondemand, better thermal behavior.',
+      'governor.userspace.name': 'Userspace',
+      'governor.userspace.desc': 'Manual control — frequency is set exclusively by userspace applications. For advanced users only.',
+
       'profile.auto_gaming': 'Auto Gaming Mode',
       'profile.gaming_boost_active': '🎮 Gaming boost active: {app}',
       'profile.monitoring': '👁 Monitoring foreground app...',
@@ -576,15 +581,20 @@
 
       /* Profile */
       'profile.governor': 'CPUガバナー',
-      'profile.governor_hint': '⚠ ガバナーを切り替えるとCPUスケーリングポリシーが変更され、ガバナーごとのOC・スケーリング・温度設定が復元されます。<strong>設定を適用</strong>をタップして有効にしてください。',
-      'profile.oc_section': 'OC & スケーリング',
-      'profile.oc_freq': 'OC周波数 (KHz)',
-      'profile.oc_volt': '電圧 (µV)',
-      'profile.scaling_max': '最大周波数 (KHz)',
-      'profile.scaling_min': '最小周波数 (KHz)',
-      'profile.dram_min': 'DRAM最小 (Hz)',
-      'profile.cpu_thermal': 'CPUサーマル',
-      'profile.gpu_thermal': 'GPUサーマル',
+      'profile.governor_hint': '⚠ ガバナーを切り替えるとOC・スケーリング・DRAM・サーマル設定が復元されます。<strong>設定を適用</strong>をタップして有効にしてください。',
+      'governor.schedutil.name': 'スケジュートゥル',
+      'governor.schedutil.desc': 'バランス型 — スケジューラの負荷率に基づいてCPU周波数を動的に調整します。日常使用に最適。',
+      'governor.performance.name': 'パフォーマンス',
+      'governor.performance.desc': '最大性能 — 全CPUコアを最高周波数に固定します。ベンチマークや高負荷作業に最適。',
+      'governor.powersave.name': 'パワーセーブ',
+      'governor.powersave.desc': '省電力 — 全CPUコアを最低周波数に固定します。応答性を犠牲にバッテリー寿命を最大化。',
+      'governor.ondemand.name': 'オンデマンド',
+      'governor.ondemand.desc': '即応型 — 負荷検出で素早く周波数を上げ、緩やかに下げます。schedutilより積極的。',
+      'governor.conservative.name': 'コンサバティブ',
+      'governor.conservative.desc': '段階型 — 周波数を少しずつ上下させます。ondemandより滑らかで発熱を抑えます。',
+      'governor.userspace.name': 'ユーザースペース',
+      'governor.userspace.desc': '手動制御 — ユーザー空間アプリのみが周波数を設定します。上級者向け。',
+
       'profile.auto_gaming': 'オートゲーミングモード',
       'profile.gaming_boost_active': '🎮 ゲーミングブースト作動中: {app}',
       'profile.monitoring': '👁 フォアグラウンドアプリを監視中...',
@@ -648,14 +658,14 @@
    *   t('cpu.opps', { n: 5 })  →  "5 OPPs"
    *   t('header.title')        →  "OC Manager"
    */
-  function t(key, params) {
+  function t(key, params, fallback) {
     const dict = translations[currentLang] || translations[DEFAULT_LANG];
     let str = dict[key];
     if (str === undefined) {
-      const fallback = translations[DEFAULT_LANG];
-      str = fallback[key];
+      const fb = translations[DEFAULT_LANG];
+      str = fb[key];
     }
-    if (str === undefined) return key; // key itself as fallback
+    if (str === undefined) return fallback !== undefined ? fallback : key; // key itself as fallback
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         str = str.replace(new RegExp('\\{' + k + '\\}', 'g'), v);
