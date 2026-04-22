@@ -1,6 +1,6 @@
 # Headwolf F8 OC Manager (APatch Module)
 
-APatch/KernelSU module (v10.7) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, governor-based power profiles, and auto gaming mode for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
+APatch/KernelSU module (**v13.0**) providing CPU, GPU, DRAM, Storage overclocking/tuning, thermal mitigation, governor-based power profiles, auto gaming mode, and a permanent sleep-reboot workaround for the Headwolf F8 tablet (MT8792 / Dimensity 8300).
 
 ## Features
 
@@ -22,13 +22,15 @@ APatch/KernelSU module (v10.7) providing CPU, GPU, DRAM, Storage overclocking/tu
 - **Display Tuning** *(v9.5+)* — Fixed/adaptive refresh rate mode (60/90/120/144 Hz), animation scale factors, PQ controls (color saturation, sharpness, ultra resolution, DRE, HDR, HFG), display idle timeout
 - **Multi-Language WebUI** *(v8.0)* — Browser-based interface with 6 tabs (CPU / GPU / RAM / Storage / Profile / Display), i18n support (English / 日本語), language switcher in header. Per-section Apply buttons; changes are instantaneous without affecting other sections
 - **Configuration Persistence** *(v9.0)* — All settings saved to per-section JSON files under `conf/` (12 files); automatically restored on boot via `insmod` params and sysfs writes. Legacy single-file `oc_config.json` is auto-migrated on first boot
+- **Sleep-Reboot Permanent Fix** *(v11.0–v13.0)* — Stock F8 firmware probabilistically watchdog-resets during screen-off sleep.  Dynamic tracing with the `kpm_oc` `KPMPHASE` / `KPMNOIRQ` / `KPMTRACE` kretprobes identified the root cause as an unfixable PSCI / ATF / MCUPM firmware hang during multi-cluster shutdown on the `s2idle` path.  `service.sh` holds a persistent `f8_sleep_reboot_guard` kernel wakelock at boot to block `s2idle` entry; normal `cpuidle` states 0–6 (up to `system-bus`) stay fully enabled so idle power during screen-off is unchanged
+- **Suspend Diagnostic Tools** *(v11.0–v13.0)* — `tools/suspend_trace_arm.sh` / `suspend_trace_extract.sh` / `suspend_trace_disarm.sh` arm the `kpm_oc` suspend tracer + `pm_print_times` + `pm_debug_messages`, drop the sleep-guard wakelock for a live test, parse `console-ramoops-0` after the next boot to identify unmatched enter/exit pairs, and restore the stable configuration (re-enable cpuidle states and re-acquire the wakelock)
 
 ## Structure
 
 ```text
-├── module.prop                     # APatch module metadata (v10.7)
-├── kpm_oc.ko                       # Compiled kernel module (v8.1)
-├── service.sh                      # Boot-time service
+├── module.prop                     # APatch module metadata (v13.0)
+├── kpm_oc.ko                       # Compiled kernel module (v11.6)
+├── service.sh                      # Boot-time service (applies f8_sleep_reboot_guard wakelock)
 ├── icon_extractor.dex              # DEX for app icon extraction (ActivityThread → Bitmap → base64)
 ├── conf.default/                   # Default config files (seeded on first install)
 │   ├── cpu_oc.json                 # CPU OC freq/volt per cluster (L/B/P)
@@ -45,8 +47,13 @@ APatch/KernelSU module (v10.7) providing CPU, GPU, DRAM, Storage overclocking/tu
 │   └── proximity.json              # Vestigial stub — proximity hardware not present on this device
 ├── conf/                           # Active config (per-user, persisted across reboots)
 │   └── (same files as conf.default/)
-├── tools/                          # Build-time Java tools (ProbeAPI, SetDisplayMode, icon extractor sources)
-│   └── dex_out/classes.dex         # Compiled DEX deployed on-device for icon extraction
+├── tools/                          # Build-time Java tools + runtime diagnostic scripts
+│   ├── dex_out/classes.dex         # Compiled DEX deployed on-device for icon extraction
+│   ├── ProbeAPI*.java              # API probes (ActivityThread, PackageManager, etc.)
+│   ├── SetDisplayMode.java         # Display mode setter
+│   ├── suspend_trace_arm.sh        # Arm kpm_oc suspend tracer + release sleep-guard wakelock
+│   ├── suspend_trace_extract.sh    # Parse KPMTRACE/KPMNOIRQ/KPMPHASE from console-ramoops-0
+│   └── suspend_trace_disarm.sh     # Disable tracer, restore cpuidle, re-acquire sleep-guard wakelock
 └── webroot/
     ├── index.html                  # WebUI shell (CPU/GPU/RAM/Storage/Profile/Display tabs)
     ├── i18n.js                     # Internationalization module (EN / JA), governor name/desc strings
@@ -71,7 +78,8 @@ APatch/KernelSU module (v10.7) providing CPU, GPU, DRAM, Storage overclocking/tu
 10. Export GPU OPP data from `/proc/gpufreqv2/gpu_working_opp_table` → `gpu_opp_table` file
 11. Detect GPU devfreq sysfs path (`/sys/class/devfreq/*mali*`)
 12. Write `gaming_monitor.sh` daemon script to `CONFIG_DIR`
-13. Launch background late-boot relift at T+45 s:
+13. **Apply `f8_sleep_reboot_guard` wakelock** — `echo f8_sleep_reboot_guard > /sys/power/wake_lock` to block `s2idle` entry and prevent the firmware-level PSCI/ATF hang that watchdog-resets the device during deep sleep (see [Sleep-Reboot Permanent Fix](#sleep-reboot-permanent-fix) below)
+14. Launch background late-boot relift at T+45 s:
     - Re-applies CPU/GPU OC, restores `scaling_max_freq`, re-sets DRAM min freq floor
     - Applies thermal mitigation (CPU trip point raising + GPU cooling device lock) per saved mode from `conf/thermal.json`
     - Applies I/O block queue tuning (scheduler, read-ahead, rq_affinity, nomerges, iostats, add_random) from `conf/io.json` to all UFS block devices
@@ -445,6 +453,111 @@ PM level values: `0`=None, `1`=Active, `2`=Standby, `3`=Sleep/Hibern8, `4`=Power
 | Foreground app | `dumpsys activity activities` / `dumpsys window` |
 
 For runtime verification, prefer the gpufreqv2 proc nodes over generic kernel-manager UI labels.
+
+## Sleep-Reboot Permanent Fix
+
+Stock F8 firmware probabilistically watchdog-resets the device during
+screen-off sleep.  Dynamic tracing with the paired `kpm_oc` suspend
+tracer conclusively identified the root cause as a firmware bug that
+cannot be patched from the kernel side.  This module ships a permanent,
+low-overhead workaround.
+
+### Symptom
+
+- Screen off → seconds to minutes later, device silently reboots
+- `/sys/fs/pstore/console-ramoops-0` after the reboot shows watchdog
+  (`HWT` / `KASSERT: Secure Monitor`) entries — not a kernel panic
+- Probability increases with time left asleep; no userspace trigger
+
+### Root cause (identified via `kpm_oc` KPMPHASE / KPMNOIRQ / KPMTRACE tracer)
+
+1. `dpm_suspend_noirq` completes cleanly every time (last KPMNOIRQ line
+   is always `exit dev=platform drv=(none) rc=0`).
+2. Control passes to `cpuidle_enter_s2idle` → `psci_cpu_suspend_enter`
+   → `cpu_suspend`, which issues a PSCI SMC into EL3.
+3. After a variable number of successful PSCI round-trips (returning
+   `rc=6` for `system-bus` or `rc=2` for `clusteroff`), one PSCI call
+   never returns.  All CPUs block in PSCI suspend; hardware watchdog
+   fires ~20–30 s later.
+4. Hang probability scales with state depth: `system-bus` hangs in
+   ~100 ms; `clusteroff` survives seconds to minutes.
+
+This is a **probabilistic hang in the MT6897 ATF / MCUPM / SPM firmware
+coordination of multi-cluster shutdown during `s2idle`**.  The PSCI SMC
+entry returns to a Secure Monitor that already lost its own scheduler
+invariant — no kernel-side retry, timeout, or handler change can
+recover, because the AP is still waiting for EL3 to reply.
+
+### Fix
+
+`service.sh` writes `f8_sleep_reboot_guard` into `/sys/power/wake_lock`
+at boot:
+
+```sh
+echo f8_sleep_reboot_guard > /sys/power/wake_lock
+```
+
+This prevents the kernel from entering `s2idle` (the only code path
+that exercises the buggy firmware coordination), while leaving normal
+`cpuidle` completely untouched.  During screen-off the CPUs still
+descend through all enabled idle states (`WFI` → `cpuoff-l` →
+`clusteroff-l` → `mcusysoff-l` → `system-mem` → `system-pll` →
+`system-bus`), so idle power consumption is unchanged vs. stock.
+`cpuidle_max_state` in `conf/cpu_tuning.json` defaults to **6**
+(`system-bus`) — the deepest state that never hangs in normal idle.
+
+### Verify
+
+```bash
+# Wakelock held
+cat /sys/power/wake_lock
+# f8_sleep_reboot_guard
+
+# cpuidle ladder fully active up to system-bus (rc=6)
+for d in /sys/devices/system/cpu/cpu0/cpuidle/state*; do
+    echo "$(basename $d) $(cat $d/name) disable=$(cat $d/disable)"
+done
+# state0 WFI             disable=0
+# state1 cpuoff-l        disable=0
+# state2 clusteroff-l    disable=0
+# state3 mcusysoff-l     disable=0
+# state4 system-mem      disable=0
+# state5 system-pll      disable=0
+# state6 system-bus      disable=0
+# state7 system-vcore    disable=1   (MTK default)
+# state8 s2idle          disable=1   (MTK default)
+
+# Tracer dormant (default)
+cat /sys/module/kpm_oc/parameters/suspend_trace_enabled
+# N
+```
+
+### Diagnostic tools (`tools/`)
+
+The three scripts below let you re-run the dynamic-tracing session that
+originally identified the firmware bug — useful if MediaTek ships a
+firmware update and you want to confirm the hang is actually fixed.
+
+| Script | Purpose |
+|--------|---------|
+| `suspend_trace_arm.sh` | Enables `pm_print_times` + `pm_debug_messages`, arms the `kpm_oc` `KPMTRACE` / `KPMNOIRQ` / `KPMPHASE` kretprobes (`suspend_trace_enabled=Y`), **drops the sleep-guard wakelock**, and opens the device up to a real sleep attempt |
+| `suspend_trace_extract.sh` | After the next reboot, mounts `/sys/fs/pstore`, parses `console-ramoops-0` for KPM\* lines, and prints any unmatched `enter` calls — those are the hang candidates |
+| `suspend_trace_disarm.sh` | Disables the tracer, restores `cpuidle_max_state` from `conf/cpu_tuning.json` (re-enables all idle states up to the configured ceiling), and re-acquires the `f8_sleep_reboot_guard` wakelock.  Use this if the device survived a test without crashing |
+
+```bash
+# Typical test flow
+su -c sh /data/adb/modules/f8_kpm_oc_manager/tools/suspend_trace_arm.sh
+# (wait for device to sleep and watchdog-reboot)
+
+# After the reboot, reconnect USB and:
+su -c sh /data/adb/modules/f8_kpm_oc_manager/tools/suspend_trace_extract.sh
+
+# If the device survived without rebooting, restore the stable state:
+su -c sh /data/adb/modules/f8_kpm_oc_manager/tools/suspend_trace_disarm.sh
+```
+
+See the [KPM OC Kernel README](https://github.com/zerofrip/Headwolf_F8_KPM_OC_Kernel#suspend-stability--sleep-reboot-investigation-v110v116)
+for the full tracer design and kretprobe hook list.
 
 ## Not Implemented / Known Limitations
 
