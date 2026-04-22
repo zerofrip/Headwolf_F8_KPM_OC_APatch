@@ -150,6 +150,54 @@ insmod ${MODDIR}/kpm_oc.ko${INSMOD_PARAMS} 2>/dev/null
 # Wait for module to initialize and auto-scan
 sleep 2
 
+# Suspend stability guard: keep modem noirq shield enabled at boot.
+# Current kpm_oc build narrows shield scope to modem/noirq neighbors only.
+if [ -w /sys/module/kpm_oc/parameters/noirq_shield_enabled ]; then
+    echo N > /sys/module/kpm_oc/parameters/noirq_shield_enabled 2>/dev/null
+    logi "kpm_oc noirq_shield_enabled forced to N (baseline suspend isolation)"
+fi
+if [ -w /sys/module/kpm_oc/parameters/dpm_shield_enabled ]; then
+    echo N > /sys/module/kpm_oc/parameters/dpm_shield_enabled 2>/dev/null
+    logi "kpm_oc dpm_shield_enabled forced to N (avoid suspend callback over-shield)"
+fi
+if [ -w /sys/module/kpm_oc/parameters/suspend_hooks_enabled ]; then
+    echo N > /sys/module/kpm_oc/parameters/suspend_hooks_enabled 2>/dev/null
+    logi "kpm_oc suspend_hooks_enabled forced to N (disable notifier side effects)"
+fi
+# Suspend call tracer: default off (opt-in diagnostic only).  When enabled,
+# every dpm_run_callback entry/exit during a suspend cycle is logged to
+# pr_warn so the hanging PM callback is visible in console-ramoops after a
+# silent watchdog reset.  Use tools/suspend_probe.sh to trigger a supervised
+# test cycle.
+if [ -w /sys/module/kpm_oc/parameters/suspend_trace_enabled ]; then
+    echo N > /sys/module/kpm_oc/parameters/suspend_trace_enabled 2>/dev/null
+    logi "kpm_oc suspend_trace_enabled forced to N (opt-in via tools/suspend_probe.sh)"
+fi
+
+# ─── Permanent sleep reboot fix (root cause confirmed) ────────────────────
+# Dynamic tracing (KPMPHASE/KPMNOIRQ kretprobes) conclusively identified the
+# root cause as a probabilistic hang in the MT6897 PSCI / ATF / MCUPM
+# firmware during the s2idle idle-loop.  Symptoms observed with the tracer:
+#   1) dpm_suspend_noirq completes cleanly every time (exit rc=0).
+#   2) cpuidle_enter_s2idle then repeatedly routes idle CPUs through
+#      psci_cpu_suspend_enter → cpu_suspend → PSCI SMC to EL3.
+#   3) After a variable number of successful round-trips (returning rc=2
+#      for clusteroff or rc=6 for system-bus), one PSCI call never returns.
+#   4) All other CPUs are also blocked in PSCI suspend; watchdog fires
+#      ~20-30 s later (KASSERT / Secure Monitor hang in ATF).
+# Hang probability rises with state depth: system-bus (rc=6) hangs in
+# ~100 ms, clusteroff (rc=2) in seconds to minutes.  Since the bug is in
+# proprietary firmware (ATF + MCUPM + SPM coordination of multi-cluster
+# shutdown during s2idle), a complete kernel-side fix is not possible.
+# The only 100 %-reliable mitigation is to block s2idle entry entirely by
+# holding a persistent kernel wakelock.  Normal cpuidle still reaches the
+# deepest state (system-bus, rc=6) during screen-off, so idle power is
+# unchanged; only the broken suspend-to-idle transition is avoided.
+if [ -w /sys/power/wake_lock ]; then
+    echo f8_sleep_reboot_guard > /sys/power/wake_lock 2>/dev/null
+    logi "Applied f8_sleep_reboot_guard wakelock (permanent fix for PSCI s2idle hang)"
+fi
+
 # Ensure sysfs parameters are accessible
 chmod 644 /sys/module/kpm_oc/parameters/opp_table 2>/dev/null
 chmod 644 /sys/module/kpm_oc/parameters/raw 2>/dev/null
@@ -218,12 +266,11 @@ if [ -f "${CONF_CPU_OC}" ]; then
     fi
 fi
 
-# GPU OC is applied automatically on module load (kpm_oc_init calls set_gpu_oc()).
-# CPU OC is applied if config params were passed via insmod.
+# OC apply status from kernel module params.
 GPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/gpu_oc_result 2>/dev/null)
-logi "GPU OC result (auto on load): ${GPU_OC_RES}"
+logi "GPU OC result: ${GPU_OC_RES}"
 CPU_OC_RES=$(cat /sys/module/kpm_oc/parameters/cpu_oc_result 2>/dev/null)
-[ -n "${CPU_OC_RES}" ] && logi "CPU OC result (auto on load): ${CPU_OC_RES}"
+[ -n "${CPU_OC_RES}" ] && logi "CPU OC result: ${CPU_OC_RES}"
 
 # GPU relift pass: re-apply GPU OC and restore devfreq max ceiling.
 if [ -f "${CONF_GPU_OC}" ]; then
@@ -624,14 +671,29 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
 {
     sleep 45
     grep -q "^kpm_oc " /proc/modules 2>/dev/null || exit 0
-    echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
-    sleep 1
+    cpu_oc_enabled=0
+    if [ -f "${CONF_CPU_OC}" ]; then
+        for key in cpu_oc_l_freq cpu_oc_b_freq cpu_oc_p_freq; do
+            v=$(json_int "${key}" "${CONF_CPU_OC}")
+            if [ -n "${v}" ] && [ "${v}" -gt 0 ] 2>/dev/null; then
+                cpu_oc_enabled=1
+                break
+            fi
+        done
+    fi
+    if [ "${cpu_oc_enabled}" = "1" ]; then
+        echo 1 > /sys/module/kpm_oc/parameters/cpu_oc_apply 2>/dev/null
+        sleep 1
+    fi
     for policy in 0 4 7; do
         max_val=$(json_int "cpu_max_${policy}" "${CONF_CPU_SCALING}")
         [ -n "${max_val}" ] && [ "${max_val}" -gt 0 ] 2>/dev/null && \
             echo "${max_val}" > "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_max_freq" 2>/dev/null
     done
-    echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+    gpu_freq=$(json_int gpu_oc_freq "${CONF_GPU_OC}")
+    if [ -n "${gpu_freq}" ] && [ "${gpu_freq}" -gt 0 ] 2>/dev/null; then
+        echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
+    fi
 
     # Re-apply voltage overrides after late relift
     if [ -f "${CONF_CPU_OC}" ]; then
@@ -725,7 +787,10 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
     logi "I/O tuning applied: ra=${io_read_ahead:-def} sched=${io_scheduler:-def} nom=${io_nomerges:-def} rqa=${io_rq_affinity:-def}"
 
     # ─── UFS controller (ufshcd) settings ────────────────────────────────
-    if [ -d "${UFS_HCI_PATH}" ]; then
+    # Safety: recent runtime panics occur in ufshcd completion/IRQ path.
+    # Keep UFS tuning opt-in only to avoid destabilizing storage controller.
+    ufs_tuning_enabled=$(json_int ufs_tuning_enabled "${CONF_UFS}")
+    if [ "${ufs_tuning_enabled}" = "1" ] && [ -d "${UFS_HCI_PATH}" ]; then
         ufs_wb=$(json_int ufs_wb_on "${CONF_UFS}")
         ufs_cg=$(json_int ufs_clkgate_enable "${CONF_UFS}")
         ufs_cd=$(json_int ufs_clkgate_delay_ms "${CONF_UFS}")
@@ -745,6 +810,8 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
             logi "UFS RPM Level = ${ufs_rpm}"
         [ -n "${ufs_spm}" ] && printf '%s' "${ufs_spm}" | tee "${UFS_HCI_PATH}/spm_lvl" > /dev/null 2>&1 && \
             logi "UFS SPM Level = ${ufs_spm}"
+    else
+        logi "UFS tuning skipped (ufs_tuning_enabled != 1)"
     fi
 
     # ─── Re-apply GPU Mali tuning (vendor services may reset sysfs) ──────
