@@ -38,6 +38,7 @@
       /* CPU */
       'cpu.cluster_title': 'CPU {name}',
       'cpu.opps': '{n} OPPs',
+      'cpu.opps_limit': '{n}/{max} OPPs',
       'cpu.max_label': 'Max: {freq}',
       'cpu.max_freq': 'Max Freq',
       'cpu.min_freq': 'Min Freq',
@@ -46,9 +47,12 @@
       'cpu.th.voltage': 'Voltage (µV)',
       'cpu.no_data': 'No CPU data loaded.',
       'cpu.no_data_hint': 'Tap "Reload" to read OPP tables.',
+      'cpu.no_voltage_module': 'CPU voltages unavailable — kpm_oc kernel module is not loaded. Remove .skip_insmod and reboot, or tap Reload after loading the module.',
+      'cpu.no_voltage_scan': 'CPU voltages missing — tap Reload or run a CSRAM scan (apply=1) from the module.',
       'cpu.add_freq_placeholder': 'Freq (MHz)',
       'cpu.add_volt_placeholder': 'Voltage (µV)',
       'cpu.opp_added': 'New CPU OPP added ({freq})',
+      'cpu.opp_added_sorted': 'CPU OPP added at {freq} ({volt}, auto-sorted)',
       'cpu.mhz_input_error': 'Enter in MHz (e.g. 3500)',
 
       /* GPU */
@@ -63,6 +67,8 @@
       'gpu.add_freq_placeholder': 'Freq (MHz)',
       'gpu.add_volt_placeholder': 'Voltage (µV)',
       'gpu.opp_added': 'New GPU OPP added ({freq})',
+      'gpu.opp_added_sorted': 'GPU OPP added at {freq} ({volt}, auto-sorted)',
+      'gpu.opps_limit': '{n}/{max} OPPs',
 
       /* GPU Tuning */
       'gpu_tuning.title': 'GPU Tuning · Mali kbase',
@@ -308,6 +314,8 @@
       'toast.error': 'Error: {label} — {err}',
       'toast.invalid_value': 'Invalid value',
       'toast.invalid_freq': 'Invalid frequency',
+      'toast.duplicate_freq': 'This frequency is already in the OPP table',
+      'toast.opp_limit': 'OPP entry limit reached ({current}/{max})',
       'toast.invalid_volt': 'Invalid voltage',
       'toast.gaming_boost_on': '🎮 Gaming boost: {app}',
       'toast.gaming_boost_off': 'Gaming boost off — reverting',
@@ -348,6 +356,7 @@
       /* CPU */
       'cpu.cluster_title': 'CPU {name}',
       'cpu.opps': '{n} OPPs',
+      'cpu.opps_limit': '{n}/{max} OPPs',
       'cpu.max_label': '最大: {freq}',
       'cpu.max_freq': '最大周波数',
       'cpu.min_freq': '最小周波数',
@@ -356,9 +365,12 @@
       'cpu.th.voltage': '電圧 (µV)',
       'cpu.no_data': 'CPUデータが読み込まれていません。',
       'cpu.no_data_hint': '「再読み込み」をタップしてOPPテーブルを読み込んでください。',
+      'cpu.no_voltage_module': 'CPU電圧を取得できません — kpm_oc カーネルモジュールが未ロードです。.skip_insmod を削除して再起動するか、ロード後に再読み込みしてください。',
+      'cpu.no_voltage_scan': 'CPU電圧がありません — 再読み込みするか、モジュールで CSRAM スキャン (apply=1) を実行してください。',
       'cpu.add_freq_placeholder': '周波数 (MHz)',
       'cpu.add_volt_placeholder': '電圧 (µV)',
       'cpu.opp_added': 'CPU OPPを追加しました ({freq})',
+      'cpu.opp_added_sorted': 'CPU OPPを追加しました {freq}（{volt}・自動ソート）',
       'cpu.mhz_input_error': 'MHz単位で入力してください（例: 3500）',
 
       /* GPU */
@@ -373,6 +385,8 @@
       'gpu.add_freq_placeholder': '周波数 (MHz)',
       'gpu.add_volt_placeholder': '電圧 (µV)',
       'gpu.opp_added': 'GPU OPPを追加しました ({freq})',
+      'gpu.opp_added_sorted': 'GPU OPPを追加しました {freq}（{volt}・自動ソート）',
+      'gpu.opps_limit': '{n}/{max} OPPs',
 
       /* GPU Tuning */
       'gpu_tuning.title': 'GPUチューニング · Mali kbase',
@@ -618,6 +632,8 @@
       'toast.error': 'エラー: {label} — {err}',
       'toast.invalid_value': '無効な値です',
       'toast.invalid_freq': '無効な周波数です',
+      'toast.duplicate_freq': 'この周波数は既にOPPテーブルに存在します',
+      'toast.opp_limit': 'OPPエントリ上限に達しました ({current}/{max})',
       'toast.invalid_volt': '無効な電圧です',
       'toast.gaming_boost_on': '🎮 ゲーミングブースト: {app}',
       'toast.gaming_boost_off': 'ゲーミングブースト終了 — 復元中',

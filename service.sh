@@ -35,6 +35,42 @@ logi() {
     log -t "KPM_OC" "$1"
 }
 
+kpm_mod_loaded() {
+    grep -q "^kpm_oc " /proc/modules 2>/dev/null
+}
+
+kpm_ko_vermagic() {
+    strings "${MODDIR}/kpm_oc.ko" 2>/dev/null | sed -n 's/^vermagic=//p' | head -1
+}
+
+kpm_expected_vermagic() {
+    local rel
+    rel=$(uname -r 2>/dev/null)
+    [ -n "${rel}" ] || return 1
+    echo "${rel} SMP preempt mod_unload modversions aarch64"
+}
+
+kpm_mark_insmod_unsafe() {
+    : > "${MODDIR}/.skip_insmod" 2>/dev/null
+    logi "created .skip_insmod — remove after kpm_oc.ko loads cleanly via manual insmod test"
+}
+
+export_cpu_opp_fallback() {
+    local policy freqs f out=""
+    for policy in 0 4 7; do
+        freqs=$(cat "/sys/devices/system/cpu/cpufreq/policy${policy}/scaling_available_frequencies" 2>/dev/null)
+        for f in ${freqs}; do
+            [ -n "${f}" ] || continue
+            if [ -n "${out}" ]; then
+                out="${out}|CPU:${policy}:${f}:0"
+            else
+                out="CPU:${policy}:${f}:0"
+            fi
+        done
+    done
+    echo "${out}"
+}
+
 resolve_gpu_devfreq_path() {
     for path in /sys/class/devfreq/*mali*; do
         if [ -d "${path}" ]; then
@@ -145,10 +181,50 @@ fi
 logi "OC config loaded:${INSMOD_PARAMS:-" (none)"}"
 
 # Load the compiled KPM module into the kernel
-insmod ${MODDIR}/kpm_oc.ko${INSMOD_PARAMS} 2>/dev/null
+if [ -f "${MODDIR}/.skip_insmod" ]; then
+    logi "kpm_oc insmod skipped (.skip_insmod marker)"
+    KPM_KO=""
+elif [ -f "${MODDIR}/disable" ]; then
+    logi "module disabled; skipping insmod"
+    KPM_KO=""
+else
+    KPM_KO="${MODDIR}/kpm_oc.ko"
+fi
+if [ -n "${KPM_KO}" ]; then
+    KPM_VM=$(kpm_ko_vermagic)
+    KPM_EXPECT=$(kpm_expected_vermagic)
+    if [ -z "${KPM_VM}" ]; then
+        logi "kpm_oc.ko missing or unreadable; skipping insmod"
+        kpm_mark_insmod_unsafe
+    elif [ -n "${KPM_EXPECT}" ] && [ "${KPM_VM}" != "${KPM_EXPECT}" ]; then
+        logi "kpm_oc.ko vermagic mismatch; skipping insmod"
+        logi "  expected: ${KPM_EXPECT}"
+        logi "  got:      ${KPM_VM}"
+        kpm_mark_insmod_unsafe
+    else
+        KPM_KO_LOAD="${KPM_KO}"
+        KPM_KO_TMP="/data/local/tmp/kpm_oc.ko"
+        if cp "${KPM_KO}" "${KPM_KO_TMP}" 2>/dev/null; then
+            KPM_KO_LOAD="${KPM_KO_TMP}"
+        fi
+        INSMOD_ERR=$(insmod "${KPM_KO_LOAD}"${INSMOD_PARAMS} 2>&1)
+        INSMOD_RC=$?
+        if [ "${INSMOD_RC}" -ne 0 ]; then
+            logi "insmod failed (rc=${INSMOD_RC}): ${INSMOD_ERR}"
+            kpm_mark_insmod_unsafe
+        else
+            logi "kpm_oc loaded from ${KPM_KO_LOAD}"
+            rm -f "${MODDIR}/.skip_insmod" 2>/dev/null
+        fi
+    fi
+fi
 
 # Wait for module to initialize and auto-scan
 sleep 2
+
+if ! kpm_mod_loaded; then
+    logi "kpm_oc not loaded; skipping module-dependent setup (userspace tuning only)"
+fi
 
 # Suspend stability guard: keep modem noirq shield enabled at boot.
 # Current kpm_oc build narrows shield scope to modem/noirq neighbors only.
@@ -256,8 +332,14 @@ if [ -f "${CONF_CPU_OC}" ]; then
     fi
 fi
 
-# ─── Restore CPU voltage overrides from config ───────────────────────────
+# ─── Restore CPU frequency + voltage overrides from config ───────────────
 if [ -f "${CONF_CPU_OC}" ]; then
+    cpu_freq_ov=$(json_arr cpu_opp_freq_overrides "${CONF_CPU_OC}")
+    if [ -n "${cpu_freq_ov}" ]; then
+        echo "${cpu_freq_ov}" > /sys/module/kpm_oc/parameters/cpu_freq_override 2>/dev/null
+        cpu_freq_ov_res=$(cat /sys/module/kpm_oc/parameters/cpu_freq_ov_result 2>/dev/null)
+        logi "CPU freq overrides restored: ${cpu_freq_ov_res}"
+    fi
     cpu_ov=$(json_arr cpu_opp_overrides "${CONF_CPU_OC}")
     if [ -n "${cpu_ov}" ]; then
         echo "${cpu_ov}" > /sys/module/kpm_oc/parameters/cpu_volt_override 2>/dev/null
@@ -312,18 +394,29 @@ if [ -f "${CONF_DRAM}" ] && [ -d "${DRAM_DEVFREQ}" ]; then
     fi
 fi
 
-# Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:raw32|...)
-CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
-if [ -z "${CPU_RAW}" ] || [ "${CPU_RAW}" = "READY" ]; then
-    echo 1 > /sys/module/kpm_oc/parameters/apply 2>/dev/null
-    sleep 1
+# Export CPU OPP table from kernel module (CSRAM data: CPU:policy:freq_khz:volt_uv|...)
+CPU_RAW=""
+if kpm_mod_loaded; then
     CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
+    if [ -z "${CPU_RAW}" ] || [ "${CPU_RAW}" = "READY" ]; then
+        echo 1 > /sys/module/kpm_oc/parameters/apply 2>/dev/null
+        sleep 1
+        CPU_RAW=$(cat /sys/module/kpm_oc/parameters/opp_table 2>/dev/null)
+    fi
 fi
-echo "${CPU_RAW}" > "${CPU_OPP_FILE}" 2>/dev/null
+if [ -z "${CPU_RAW}" ] || ! echo "${CPU_RAW}" | grep -q "CPU:"; then
+    CPU_RAW=$(export_cpu_opp_fallback)
+    logi "CPU OPP fallback from cpufreq (volt=0 until kpm_oc loads)"
+fi
+if [ -n "${CPU_RAW}" ]; then
+    echo "${CPU_RAW}" > "${CPU_OPP_FILE}" 2>/dev/null
+    chmod 666 "${CPU_OPP_FILE}" 2>/dev/null
+fi
 
 # Export raw hex dump for debugging
 RAW_DUMP=$(cat /sys/module/kpm_oc/parameters/raw 2>/dev/null)
 echo "${RAW_DUMP}" > "${CPU_RAW_FILE}" 2>/dev/null
+chmod 666 "${CPU_RAW_FILE}" 2>/dev/null
 
 logi "CPU OPP: $(echo "${CPU_RAW}" | wc -c) bytes, raw: $(echo "${RAW_DUMP}" | wc -c) bytes"
 
@@ -343,7 +436,10 @@ if [ -f /proc/gpufreqv2/gpu_working_opp_table ]; then
         fi
     done < /proc/gpufreqv2/gpu_working_opp_table
 fi
-echo "${GPU_DATA}" > "${GPU_OPP_FILE}" 2>/dev/null
+if [ -n "${GPU_DATA}" ]; then
+    echo "${GPU_DATA}" > "${GPU_OPP_FILE}" 2>/dev/null
+    chmod 666 "${GPU_OPP_FILE}" 2>/dev/null
+fi
 logi "GPU OPP table exported: $(echo "${GPU_DATA}" | wc -c) bytes"
 
 # Store GPU devfreq path for WebUI
@@ -695,8 +791,11 @@ logi "Gaming monitor script written to ${GAMING_SCRIPT}"
         echo 1 > /sys/module/kpm_oc/parameters/gpu_oc_apply 2>/dev/null
     fi
 
-    # Re-apply voltage overrides after late relift
+    # Re-apply frequency + voltage overrides after late relift
     if [ -f "${CONF_CPU_OC}" ]; then
+        cpu_freq_ov=$(grep -o '"cpu_opp_freq_overrides":\["[^]]*\]' "${CONF_CPU_OC}" 2>/dev/null | \
+            sed 's/.*\[//;s/\]//;s/"//g;s/,/ /g')
+        [ -n "${cpu_freq_ov}" ] && echo "${cpu_freq_ov}" > /sys/module/kpm_oc/parameters/cpu_freq_override 2>/dev/null
         cpu_ov=$(grep -o '"cpu_opp_overrides":\["[^]]*\]' "${CONF_CPU_OC}" 2>/dev/null | \
             sed 's/.*\[//;s/\]//;s/"//g;s/,/ /g')
         [ -n "${cpu_ov}" ] && echo "${cpu_ov}" > /sys/module/kpm_oc/parameters/cpu_volt_override 2>/dev/null

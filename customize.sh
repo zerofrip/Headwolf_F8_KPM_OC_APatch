@@ -32,4 +32,10 @@ for f in cpu_opp_table gpu_opp_table cpu_raw_dump gpu_devfreq_path; do
     fi
 done
 
+# Preserve insmod safety marker only when updating an existing install
+if [ -f "${OLD_DIR}/.skip_insmod" ]; then
+    cp -af "${OLD_DIR}/.skip_insmod" "${MODPATH}/.skip_insmod"
+    ui_print "- .skip_insmod preserved (kpm_oc insmod disabled until removed)"
+fi
+
 ui_print "- Installation complete"

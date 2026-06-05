@@ -421,6 +421,12 @@ body::before {
   border-left: 2px solid var(--accent-success);
 }
 
+.opp-table tbody tr.displaced-entry {
+  background: rgba(148, 163, 184, 0.06);
+  border-left: 2px solid var(--text-muted);
+  opacity: 0.85;
+}
+
 .opp-table tbody tr.removing {
   background: rgba(239, 68, 68, 0.06);
   opacity: 0.5;
